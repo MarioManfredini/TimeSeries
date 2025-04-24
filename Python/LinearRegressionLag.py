@@ -10,8 +10,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-target_item = 'Ox(ppm)'
-
 ###############################################################################
 # === Caricamento dati ===
 from utility import load_and_prepare_data
@@ -27,6 +25,9 @@ lags = 2
 lagged_items = ['SO2(ppm)', 'NO(ppm)', 'NO2(ppm)',
            'NMHC(ppmC)', 'CH4(ppmC)', 'SPM(mg/m3)', 'PM2.5(μg/m3)',
            'U', 'V', 'TEMP(℃)', 'HUM(％)', 'Ox(ppm)']
+#lagged_items = ['NO(ppm)', 'Ox(ppm)']
+
+target_item = 'Ox(ppm)'
 
 lagged_data = pd.DataFrame()
 
@@ -76,7 +77,7 @@ plt.title(f'Regressione con lag 1-2\nR²: {r2_lagged:.5f}')
 plt.xlabel('Campioni')
 plt.ylabel(target_item)
 plt.legend()
-
+plt.grid(True)
 plt.tight_layout()
 plt.show()
 
@@ -104,4 +105,3 @@ print(f"\nmedia misurazioni: {np.average(data[target_item]):.5f}")
 print(f"MAE (Errore Assoluto Medio) - Modello Con Lag: {mae:.5f}")
 print(f"MSE (Errore Quadratico Medio) - Modello Con Lag: {mse:.5f}")
 print(f"RMSE (Radice Errore Quadratico Medio) - Modello Con Lag: {rmse:.5f}")
-
