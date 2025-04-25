@@ -101,10 +101,22 @@ def load_and_prepare_data(data_dir, prefecture_code, station_code):
             data['WS(m/s)'] = pd.to_numeric(data['WS(m/s)'], errors='coerce')
 
         if 'WS(m/s)' in data.columns and 'WD_degrees' in data.columns:
-            angle_rad = np.deg2rad(data['WD_degrees'])
-            data['U'] = data['WS(m/s)'] * np.sin(angle_rad)
-            data['V'] = data['WS(m/s)'] * np.cos(angle_rad)
-            logger.info("Wind components U and V calculated.")
+            # Prepara le colonne U e V con zeri
+            data['U'] = 0.0
+            data['V'] = 0.0
+        
+            # Identifica i record validi con direzione non-NaN (quindi non 'CALM')
+            valid_wind_mask = data['WD_degrees'].notna()
+        
+            # Calcola i componenti solo dove ha senso
+            angle_rad = np.deg2rad(data.loc[valid_wind_mask, 'WD_degrees'])
+            ws_values = data.loc[valid_wind_mask, 'WS(m/s)']
+        
+            data.loc[valid_wind_mask, 'U'] = ws_values * np.sin(angle_rad)
+            data.loc[valid_wind_mask, 'V'] = ws_values * np.cos(angle_rad)
+        
+            logger.info("Wind components U and V calculated (including calm wind as 0).")
+
 
     data.sort_index(inplace=True)
     logger.info(f"Data prepared successfully with {len(data)} rows and {len(valid_items)} valid items.")
@@ -167,4 +179,3 @@ def calculate_uv(row):
     u = speed * np.sin(angle_rad)
     v = speed * np.cos(angle_rad)
     return pd.Series({'U': u, 'V': v})
-
