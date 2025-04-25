@@ -10,6 +10,7 @@ import numpy as np
 import lightgbm as lgb
 import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+from sklearn.model_selection import TimeSeriesSplit
 
 ###############################################################################
 # === Caricamento dati ===
@@ -50,10 +51,10 @@ lagged_data[f'{target_item}_diff_1'] = data[target_item].diff(1)
 lagged_data['TEMP_diff_3'] = data['TEMP(℃)'].diff(3)
 
 # === Feature temporali ===
-lagged_data['hour'] = data.index.hour
-lagged_data['is_night'] = lagged_data['hour'].apply(lambda x: 1 if x < 6 else 0)
-lagged_data['weekday'] = data.index.weekday
-lagged_data['is_weekend'] = lagged_data['weekday'].apply(lambda x: 1 if x >= 5 else 0)
+#lagged_data['hour'] = data.index.hour
+#lagged_data['is_night'] = lagged_data['hour'].apply(lambda x: 1 if x < 6 else 0)
+#lagged_data['weekday'] = data.index.weekday
+#lagged_data['is_weekend'] = lagged_data['weekday'].apply(lambda x: 1 if x >= 5 else 0)
 
 # === Pulizia finale ===
 lagged_data = lagged_data.dropna()
@@ -64,102 +65,69 @@ lagged_data = lagged_data.dropna()
 X_lagged = lagged_data.drop(columns=[target_item])
 y_lagged = lagged_data[target_item]
 
-split_index = int(len(X_lagged) * 0.7)
-X_train_lagged = X_lagged.iloc[:split_index]
-X_test_lagged = X_lagged.iloc[split_index:]
-y_train_lagged = y_lagged.iloc[:split_index]
-y_test_lagged = y_lagged.iloc[split_index:]
+# === TimeSeriesSplit ===
+tscv = TimeSeriesSplit(n_splits=5)
+r2_scores = []
+mae_scores = []
+rmse_scores = []
+importance_df = []
 
-###############################################################################
-"""
-from sklearn.model_selection import GridSearchCV
-import lightgbm as lgb
+for train_index, test_index in tscv.split(X_lagged):
+    X_train, X_test = X_lagged.iloc[train_index], X_lagged.iloc[test_index]
+    y_train, y_test = y_lagged.iloc[train_index], y_lagged.iloc[test_index]
 
-# Definisci il modello base
-lgb_model = lgb.LGBMRegressor(objective='regression', random_state=42)
+    model = lgb.LGBMRegressor(
+        objective='regression',
+        boosting_type='gbdt',
+        n_estimators=300,
+        learning_rate=0.05,
+        max_depth=5,
+        subsample=0.6,
+        colsample_bytree=1.0,
+        min_data_in_leaf=20,
+        random_state=42
+    )
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
 
-# Griglia dei parametri
-param_grid = {
-    'learning_rate': [0.01, 0.05, 0.1],
-    'n_estimators': [100, 300, 500],
-    'max_depth': [3, 5, 7],
-    'subsample': [0.6, 0.8, 1.0],
-    'colsample_bytree': [0.6, 0.8, 1.0],
-    'min_data_in_leaf': [5, 10, 20]
-}
+    r2_scores.append(r2_score(y_test, y_pred))
+    mae_scores.append(mean_absolute_error(y_test, y_pred))
+    rmse_scores.append(np.sqrt(mean_squared_error(y_test, y_pred)))
+    importance_df.append(pd.DataFrame({
+        'Feature': X_train.columns,
+        'Importance': model.feature_importances_ / sum(model.feature_importances_)
+        }).sort_values(by='Importance', ascending=False))
 
-# GridSearch con 3-fold cross-validation
-grid_search = GridSearchCV(
-    estimator=lgb_model,
-    param_grid=param_grid,
-    cv=3,
-    scoring='r2',
-    verbose=2,
-    n_jobs=-1
-)
-
-# Esegui il tuning
-grid_search.fit(X_train_lagged, y_train_lagged)
-
-# Risultati
-print("Migliori parametri trovati:")
-print(grid_search.best_params_)
-
-# Valutazione sul test set
-best_lgb = grid_search.best_estimator_
-y_pred = best_lgb.predict(X_test_lagged)
-
-print(f"R²: {r2_score(y_test_lagged, y_pred):.5f}")
-print(f"MAE: {mean_absolute_error(y_test_lagged, y_pred):.5f}")
-print(f"MSE: {mean_squared_error(y_test_lagged, y_pred):.5f}")
-print(f"RMSE: {mean_squared_error(y_test_lagged, y_pred)**0.5:.5f}")
-
-"""
-###############################################################################
-# === Modello LightGBM ===
-
-lgb_model = lgb.LGBMRegressor(
-    objective='regression',
-    boosting_type='gbdt',
-    n_estimators=300,
-    learning_rate=0.05,
-    max_depth=5,
-    subsample=0.6,
-    colsample_bytree=1.0,
-    min_data_in_leaf=20,
-    random_state=42
-)
-
-lgb_model.fit(X_train_lagged, y_train_lagged)
-y_pred = lgb_model.predict(X_test_lagged)
-
-r2 = r2_score(y_test_lagged, y_pred)
-mae = mean_absolute_error(y_test_lagged, y_pred)
-mse = mean_squared_error(y_test_lagged, y_pred)
-rmse = np.sqrt(mse)
-
-print(f'R²: {r2:.5f}')
-print(f'MAE: {mae:.5f}')
-print(f'MSE: {mse:.5f}')
-print(f'RMSE: {rmse:.5f}')
-
-###############################################################################
-# === Importanza delle feature ===
-
-importance_df = pd.DataFrame({
-    'Feature': X_train_lagged.columns,
-    'Importance': lgb_model.feature_importances_ / sum(lgb_model.feature_importances_)
-}).sort_values(by='Importance', ascending=False)
-
-print("\nFeature Importance dettagliata:")
-for index, row in importance_df.iterrows():
-    print(f"{row['Feature']}: {row['Importance']:.5f}")
-
-# === Grafico opzionale ===
-plt.figure(figsize=(10,6))
-plt.barh(importance_df['Feature'], importance_df['Importance'], color='skyblue')
-plt.xlabel("Importanza Normalizzata")
-plt.title("Feature Importance - LightGBM")
-plt.gca().invert_yaxis()
+# === Visualizzazione delle prestazioni nell'ultimo fold ===
+plt.figure(figsize=(10, 5))
+plt.plot(y_test.values, label='Valori Reali')
+plt.plot(y_pred, label='Valori Predetti')
+plt.title('Confronto tra valori reali e predetti (ultimo fold)')
+plt.xlabel('Index')
+plt.ylabel('Ox(ppm)')
+plt.legend()
+plt.grid(True)
 plt.tight_layout()
 plt.show()
+
+# === Risultati medi ===
+print(f"\nR² medio: {np.mean(r2_scores):.5f}")
+print(f"MAE medio: {np.mean(mae_scores):.5f}")
+print(f"RMSE medio: {np.mean(rmse_scores):.5f}")
+
+for index, importance in enumerate(importance_df):
+    print(f"\nSplit {index+1}:")
+    print(f"R²: {r2_scores[index]:.5f}")
+    print(f"MAE: {mae_scores[index]:.5f}")
+    print(f"RMSE: {rmse_scores[index]:.5f}")
+    print("------- Feature Importance dettagliata:")
+    # === Grafico ===
+    plt.figure(figsize=(10,6))
+    plt.barh(importance['Feature'], importance['Importance'], color='skyblue')
+    plt.xlabel("Importanza Normalizzata")
+    plt.title(f"Feature Importance Split {index+1} - LightGBM")
+    plt.gca().invert_yaxis()
+    plt.tight_layout()
+    plt.show()
+    for index, row in importance.iterrows():
+        print(f"{row['Feature']}: {row['Importance']:.5f}")
