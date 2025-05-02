@@ -1,19 +1,20 @@
 {
     "lag": 24,
     "epochs": 100,
-    "batch_size": 64,
-    "learning_rate": 0.0005,
-    "hidden_size": 64,
+    "batch_size": 128,
+    "learning_rate": 0.001,
+    "hidden_size": 32,
     "num_layers": 2,
     "dropout": 0.3,
     "patience": 3,
+    "target_item": "Ox(ppm)",
     "features": [
-        "station_id",
         "Ox(ppm)",
         "Ox(ppm)_diff_1",
         "Ox(ppm)_lag1",
         "Ox(ppm)_lag2",
-        "Ox(ppm)_roll_mean_3"
+        "Ox(ppm)_roll_mean_3",
+        "station_id"
     ],
     "prefecture_code": "38",
     "station_codes": [

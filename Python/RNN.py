@@ -13,6 +13,38 @@ from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
 from utility import load_and_prepare_data
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+import json
+
+# === Parametri ===
+LAG = 24
+EPOCHS = 150
+BATCH_SIZE = 128
+LR = 0.001
+HIDDEN_SIZE = 16
+PATIENCE = 3
+
+features = [
+    'Ox(ppm)',
+    'Ox(ppm)_diff_1',
+    'Ox(ppm)_lag1',
+    'Ox(ppm)_lag2',
+    'Ox(ppm)_roll_mean_3',
+    ]
+
+target_item = 'Ox(ppm)'
+
+PARAMS_PATH = "rnn_best_params.json"
+params = {
+    "lag": LAG,
+    "epochs": EPOCHS,
+    "batch_size": BATCH_SIZE,
+    "learning_rate": LR,
+    "hidden_size": HIDDEN_SIZE,
+    "patience": PATIENCE,
+    "features": features
+}
+with open(PARAMS_PATH, "w") as f:
+    json.dump(params, f, indent=4, ensure_ascii=False)
 
 # === Caricamento dati ===
 data_dir = '..\\data\\Ehime\\'
@@ -20,17 +52,16 @@ prefecture_code = '38'
 station_code = '38205010'
 data_all, items = load_and_prepare_data(data_dir, prefecture_code, station_code)
 
-# === Colonne usate ===
-cols = ['SO2(ppm)', 'NO(ppm)', 'NO2(ppm)', 'NMHC(ppmC)', 'CH4(ppmC)',
-        'SPM(mg/m3)', 'PM2.5(μg/m3)', 'U', 'V', 'TEMP(℃)', 'HUM(％)', 'Ox(ppm)']
-target_item = 'Ox(ppm)'
-ox_series = data_all[cols][target_item].dropna()  # Solo la colonna Ox(ppm)
+# === Feature derivate ===
+df = data_all.copy()
+df['Ox(ppm)_diff_1'] = df[target_item].diff(1)
+df['Ox(ppm)_lag1'] = df[target_item].shift(1)
+df['Ox(ppm)_lag2'] = df[target_item].shift(2)
+df['Ox(ppm)_roll_mean_3'] = df[target_item].rolling(window=3).mean()
+#df['TEMP_diff_3'] = df['TEMP(℃)'].diff(3)
 
-# --- Parametri ---
-LAG = 3
-EPOCHS = 100
-BATCH_SIZE = 128
-LR = 0.001
+# === Selezione delle feature ===
+df_selected = df[features].dropna()
 
 # --- Funzione per creare sequenze ---
 def create_sequences(series, lag):
@@ -42,7 +73,7 @@ def create_sequences(series, lag):
 
 # --- Preparazione dataset ---
 scaler = MinMaxScaler()
-scaled_series = scaler.fit_transform(ox_series.values.reshape(-1, 1)).flatten()
+scaled_series = scaler.fit_transform(df_selected.values.reshape(-1, 1)).flatten()
 
 X, y = create_sequences(scaled_series, LAG)
 
@@ -54,12 +85,12 @@ train_size = int(0.8 * len(dataset))
 val_size = len(dataset) - train_size
 train_ds, val_ds = random_split(dataset, [train_size, val_size])
 
-train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
+train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=False)
 val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE)
 
 # --- Definizione della RNN ---
 class SimpleRNN(nn.Module):
-    def __init__(self, input_size=1, hidden_size=50, num_layers=1):
+    def __init__(self, input_size=1, hidden_size=HIDDEN_SIZE, num_layers=1):
         super(SimpleRNN, self).__init__()
         self.rnn = nn.RNN(input_size, hidden_size, num_layers, batch_first=True)
         self.fc = nn.Linear(hidden_size, 1)
@@ -74,28 +105,66 @@ model = SimpleRNN()
 loss_fn = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
-# --- Training ---
+# --- Training con Early Stopping e salvataggio modello ---
+best_val_loss = float('inf')
+epochs_no_improve = 0
+train_losses = []
+val_losses = []
+best_model_path = "rnn_best_model.pth"
+
 for epoch in range(EPOCHS):
     model.train()
+    epoch_train_loss = 0.0
     for xb, yb in train_loader:
         pred = model(xb)
         loss = loss_fn(pred, yb)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        epoch_train_loss += loss.item()
+    epoch_train_loss /= len(train_loader)
 
-    # Valutazione
+    # Validazione
     model.eval()
-    val_loss = 0.0
+    epoch_val_loss = 0.0
     with torch.no_grad():
         for xb, yb in val_loader:
             pred = model(xb)
-            val_loss += loss_fn(pred, yb).item()
-    val_loss /= len(val_loader)
-    print(f"Epoch {epoch+1}/{EPOCHS}, Val Loss: {val_loss:.6f}")
+            epoch_val_loss += loss_fn(pred, yb).item()
+    epoch_val_loss /= len(val_loader)
 
-# --- Valutazione finale ---
+    train_losses.append(epoch_train_loss)
+    val_losses.append(epoch_val_loss)
+
+    print(f"Epoch {epoch+1}/{EPOCHS} - Train Loss: {epoch_train_loss:.6f} - Val Loss: {epoch_val_loss:.6f}")
+
+    # Early Stopping
+    if epoch_val_loss < best_val_loss:
+        best_val_loss = epoch_val_loss
+        epochs_no_improve = 0
+        torch.save(model.state_dict(), best_model_path)
+    else:
+        epochs_no_improve += 1
+        if epochs_no_improve >= PATIENCE:
+            print(f"Early stopping at epoch {epoch+1}")
+            break
+
+# --- Ricarica modello migliore ---
+model.load_state_dict(torch.load(best_model_path))
 model.eval()
+
+# --- Curva di apprendimento ---
+plt.figure(figsize=(8, 4))
+plt.plot(train_losses, label="Train Loss")
+plt.plot(val_losses, label="Val Loss")
+plt.title("Learning Curve")
+plt.xlabel("Epoch")
+plt.ylabel("Loss (MSE)")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
 with torch.no_grad():
     y_pred = model(X_tensor).squeeze().numpy()
     y_true = y_tensor.squeeze().numpy()

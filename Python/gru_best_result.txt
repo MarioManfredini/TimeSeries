@@ -1,0 +1,4 @@
+=== Normalized Scale ===
+R²: 0.762504, MAE: 0.052335, RMSE: 0.069438
+=== Original Scale ===
+R²: 0.762504, MAE: 0.005024, RMSE: 0.006666

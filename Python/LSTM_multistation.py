@@ -21,20 +21,30 @@ LAG = 24
 EPOCHS = 100
 BATCH_SIZE = 128
 LR = 0.001
-HIDDEN_SIZE = 64
+HIDDEN_SIZE = 32
 NUM_LAYERS = 2
-DROPOUT = 0.2
+DROPOUT = 0.3
 PATIENCE = 3
 
-features = [
-    'Ox(ppm)',
-    'Ox(ppm)_diff_1',
-    'Ox(ppm)_lag1',
-    'Ox(ppm)_lag2',
-    'Ox(ppm)_roll_mean_3'
-    ]
+# === Caricamento dati di più stazioni ===
+data_dir = '..\\data\\Ehime\\'
+prefecture_code = '38'
+station_codes = ['38205010',
+                 '38201020',
+                 '38201090',
+                 '38201530']
+dfs = []
 
+# === Selezione delle feature, incluso station_id ===
 target_item = 'Ox(ppm)'
+features = [
+    f'{target_item}',
+    f'{target_item}_diff_1',
+    f'{target_item}_lag1',
+    f'{target_item}_lag2',
+    f'{target_item}_roll_mean_3',
+    'station_id',
+    ]
 
 PARAMS_PATH = "lstm_best_params.json"
 params = {
@@ -46,31 +56,44 @@ params = {
     "num_layers": NUM_LAYERS,
     "dropout": DROPOUT,
     "patience": PATIENCE,
-    "features": features
+    "target_item": target_item,
+    "features": features,
+    "prefecture_code": prefecture_code,
+    "station_codes": station_codes,
 }
 with open(PARAMS_PATH, "w") as f:
     json.dump(params, f, indent=4, ensure_ascii=False)
 
-# === Caricamento dati ===
-data_dir = '..\\data\\Ehime\\'
-prefecture_code = '38'
-station_code = '38205010'
-data_all, items = load_and_prepare_data(data_dir, prefecture_code, station_code)
+for code in station_codes:
+    df_tmp, _ = load_and_prepare_data(data_dir, prefecture_code, code)
+    df_tmp['station_id'] = int(code)
+    dfs.append(df_tmp)
+
+df_all = pd.concat(dfs).sort_index()
 
 # === Feature derivate ===
-df = data_all.copy()
-df['Ox(ppm)_diff_1'] = df[target_item].diff(1)
-df['Ox(ppm)_lag1'] = df[target_item].shift(1)
-df['Ox(ppm)_lag2'] = df[target_item].shift(2)
-df['Ox(ppm)_roll_mean_3'] = df[target_item].rolling(window=3).mean()
-#df['TEMP_diff_3'] = df['TEMP(℃)'].diff(3)
-# === Selezione delle feature ===
-df_selected = df[features].dropna()
+df_all[f'{target_item}_diff_1'] = df_all[f'{target_item}'].diff()
+df_all[f'{target_item}_lag1'] = df_all[f'{target_item}'].shift(1)
+df_all[f'{target_item}_lag2'] = df_all[f'{target_item}'].shift(2)
+df_all[f'{target_item}_roll_mean_3'] = df_all[f'{target_item}'].rolling(window=3).mean()
+"""
+Se si aggiungono le caretteristiche legate a NOx il modello peggiora (forse troppo numerose)
+df_all['NOx(ppm)_lag1'] = df_all['NOx(ppm)'].shift(1)
+df_all['NOx(ppm)_lag2'] = df_all['NOx(ppm)'].shift(2)
+df_all['NOx(ppm)_roll_mean_3'] = df_all['NOx(ppm)'].rolling(window=3).mean()
+df_all['NOx(ppm)_roll_std_6'] = df_all['NOx(ppm)'].rolling(window=6).std()
+df_all['NOx(ppm)_diff_3'] = df_all['NOx(ppm)'].diff(3)
+"""
+
+df_selected = df_all[features].dropna()
 
 # === Normalizzazione ===
 scaler = MinMaxScaler()
 scaled = scaler.fit_transform(df_selected)
 scaled_df = pd.DataFrame(scaled, columns=df_selected.columns)
+
+from joblib import dump
+dump(scaler, "lstm_scaler.joblib")
 
 X_scaled = scaled_df[features]
 y_scaled = scaled_df[target_item]
@@ -117,7 +140,7 @@ loss_fn = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
 # === Early Stopping ===
-MODEL_PATH = "best_lstm_model.pth"
+MODEL_PATH = "lstm_best_model.pth"
 best_val_loss = float('inf')
 epochs_no_improve = 0
 train_losses, val_losses = [], []

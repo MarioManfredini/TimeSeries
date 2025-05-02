@@ -24,7 +24,8 @@ data, items = load_and_prepare_data(data_dir, prefecture_code, station_code)
 ###############################################################################
 # === Lag e feature derivate ===
 
-lagged_items = ['NOx(ppm)', 'U', 'V', 'TEMP(℃)', 'HUM(％)', 'Ox(ppm)']
+#lagged_items = ['NOx(ppm)', 'U', 'V', 'TEMP(℃)', 'HUM(％)', 'Ox(ppm)']
+lagged_items = ['NOx(ppm)', 'Ox(ppm)']
 target_item = 'Ox(ppm)'
 lags = 2
 
@@ -42,13 +43,16 @@ lagged_data[target_item] = data[target_item]
 
 # Media mobile
 lagged_data[f'{target_item}_roll_mean_3'] = data[target_item].rolling(window=3).mean()
+lagged_data['NOx(ppm)_roll_mean_3'] = data['NOx(ppm)'].rolling(window=3).mean()
 
 # Deviazione standard
-lagged_data['TEMP_roll_std_6'] = data['TEMP(℃)'].rolling(window=6).std()
+#lagged_data['TEMP_roll_std_6'] = data['TEMP(℃)'].rolling(window=6).std()
+lagged_data['NOx(ppm)_roll_std_6'] = data['NOx(ppm)'].rolling(window=6).std()
 
 # Differenze
 lagged_data[f'{target_item}_diff_1'] = data[target_item].diff(1)
-lagged_data['TEMP_diff_3'] = data['TEMP(℃)'].diff(3)
+#lagged_data['TEMP_diff_3'] = data['TEMP(℃)'].diff(3)
+lagged_data['NOx(ppm)_diff_3'] = data['NOx(ppm)'].diff(3)
 
 # === Feature temporali ===
 #lagged_data['hour'] = data.index.hour
