@@ -23,7 +23,7 @@ BATCH_SIZE = 128
 LR = 0.001
 HIDDEN_SIZE = 32
 NUM_LAYERS = 2
-DROPOUT = 0.3
+DROPOUT = 0.5
 PATIENCE = 3
 
 # === Caricamento dati di più stazioni ===
@@ -43,6 +43,12 @@ features = [
     f'{target_item}_lag1',
     f'{target_item}_lag2',
     f'{target_item}_roll_mean_3',
+    'NO(ppm)_roll_std_6',
+    'NO(ppm)_diff_3',
+    'NO(ppm)_roll_mean_3',
+    'NO2(ppm)_roll_std_6',
+    'NO2(ppm)_diff_3',
+    'NO2(ppm)_roll_mean_3',
     'station_id',
     ]
 
@@ -76,6 +82,12 @@ df_all[f'{target_item}_diff_1'] = df_all[f'{target_item}'].diff()
 df_all[f'{target_item}_lag1'] = df_all[f'{target_item}'].shift(1)
 df_all[f'{target_item}_lag2'] = df_all[f'{target_item}'].shift(2)
 df_all[f'{target_item}_roll_mean_3'] = df_all[f'{target_item}'].rolling(window=3).mean()
+df_all['NO(ppm)_roll_std_6'] = df_all['NO(ppm)'].rolling(window=6).std()
+df_all['NO(ppm)_diff_3'] = df_all['NO(ppm)'].diff(3)
+df_all['NO(ppm)_roll_mean_3'] = df_all['NO(ppm)'].rolling(window=3).mean()
+df_all['NO2(ppm)_roll_std_6'] = df_all['NO2(ppm)'].rolling(window=6).std()
+df_all['NO2(ppm)_diff_3'] = df_all['NO2(ppm)'].diff(3)
+df_all['NO2(ppm)_roll_mean_3'] = df_all['NO2(ppm)'].rolling(window=3).mean()
 """
 Se si aggiungono le caretteristiche legate a NOx il modello peggiora (forse troppo numerose)
 df_all['NOx(ppm)_lag1'] = df_all['NOx(ppm)'].shift(1)
@@ -88,12 +100,12 @@ df_all['NOx(ppm)_diff_3'] = df_all['NOx(ppm)'].diff(3)
 df_selected = df_all[features].dropna()
 
 # === Normalizzazione ===
-scaler = MinMaxScaler()
-scaled = scaler.fit_transform(df_selected)
+scaler_input = MinMaxScaler()
+scaled = scaler_input.fit_transform(df_selected)
 scaled_df = pd.DataFrame(scaled, columns=df_selected.columns)
 
 from joblib import dump
-dump(scaler, "lstm_scaler.joblib")
+dump(scaler_input, "lstm_scaler_input.joblib")
 
 X_scaled = scaled_df[features]
 y_scaled = scaled_df[target_item]
@@ -201,11 +213,12 @@ with torch.no_grad():
 
 # === Inversione normalizzazione solo target ===
 target_index = list(df_selected.columns).index(target_item)
-target_scaler = MinMaxScaler()
-target_scaler.min_, target_scaler.scale_ = scaler.min_[target_index:target_index+1], scaler.scale_[target_index:target_index+1]
+scaler_target = MinMaxScaler()
+scaler_target.min_, scaler_target.scale_ = scaler_input.min_[target_index:target_index+1], scaler_input.scale_[target_index:target_index+1]
+dump(scaler_target, "lstm_scaler_target.joblib")
 
-y_pred_inv = target_scaler.inverse_transform(y_pred.reshape(-1, 1)).flatten()
-y_true_inv = target_scaler.inverse_transform(y_true.reshape(-1, 1)).flatten()
+y_pred_inv = scaler_target.inverse_transform(y_pred.reshape(-1, 1)).flatten()
+y_true_inv = scaler_target.inverse_transform(y_true.reshape(-1, 1)).flatten()
 
 # === Metriche ===
 r2 = r2_score(y_true_inv, y_pred_inv)

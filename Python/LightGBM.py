@@ -25,9 +25,9 @@ data, items = load_and_prepare_data(data_dir, prefecture_code, station_code)
 # === Lag e feature derivate ===
 
 #lagged_items = ['NOx(ppm)', 'U', 'V', 'TEMP(℃)', 'HUM(％)', 'Ox(ppm)']
-lagged_items = ['NOx(ppm)', 'Ox(ppm)']
+lagged_items = ['SO2(ppm)', 'NO(ppm)', 'NO2(ppm)', 'U', 'V', 'Ox(ppm)']
 target_item = 'Ox(ppm)'
-lags = 2
+lags = 4
 
 lagged_data = pd.DataFrame(index=data.index)  # Assicura stesso indice
 
@@ -39,25 +39,41 @@ for item in lagged_items:
 # Target
 lagged_data[target_item] = data[target_item]
 
+lagged_data[f'{target_item}_lag24'] = data[target_item].shift(24)
+
 # === Feature derivate ===
 
 # Media mobile
 lagged_data[f'{target_item}_roll_mean_3'] = data[target_item].rolling(window=3).mean()
-lagged_data['NOx(ppm)_roll_mean_3'] = data['NOx(ppm)'].rolling(window=3).mean()
+lagged_data['NO(ppm)_roll_mean_3'] = data['NO(ppm)'].rolling(window=3).mean()
+lagged_data['NO2(ppm)_roll_mean_3'] = data['NO2(ppm)'].rolling(window=3).mean()
+#lagged_data['NO(ppm)_roll_mean_24'] = data['NO(ppm)'].rolling(window=24).mean()
+#lagged_data['NO2(ppm)_roll_mean_24'] = data['NO2(ppm)'].rolling(window=24).mean()
+lagged_data['U_roll_mean_3'] = data['U'].rolling(window=3).mean()
+lagged_data['V_roll_mean_3'] = data['V'].rolling(window=3).mean()
 
 # Deviazione standard
+lagged_data[f'{target_item}_roll_std_6'] = data[target_item].rolling(window=6).std()
 #lagged_data['TEMP_roll_std_6'] = data['TEMP(℃)'].rolling(window=6).std()
-lagged_data['NOx(ppm)_roll_std_6'] = data['NOx(ppm)'].rolling(window=6).std()
+lagged_data['NO(ppm)_roll_std_6'] = data['NO(ppm)'].rolling(window=6).std()
+lagged_data['NO2(ppm)_roll_std_6'] = data['NO2(ppm)'].rolling(window=6).std()
+lagged_data['U_roll_std_6'] = data['U'].rolling(window=6).std()
+lagged_data['V_roll_std_6'] = data['V'].rolling(window=6).std()
 
 # Differenze
 lagged_data[f'{target_item}_diff_1'] = data[target_item].diff(1)
+lagged_data[f'{target_item}_diff_2'] = data[target_item].diff(2)
+lagged_data[f'{target_item}_diff_3'] = data[target_item].diff(3)
 #lagged_data['TEMP_diff_3'] = data['TEMP(℃)'].diff(3)
-lagged_data['NOx(ppm)_diff_3'] = data['NOx(ppm)'].diff(3)
+lagged_data['NO(ppm)_diff_3'] = data['NO(ppm)'].diff(3)
+lagged_data['NO2(ppm)_diff_3'] = data['NO2(ppm)'].diff(3)
+lagged_data['U_diff_3'] = data['U'].diff(3)
+lagged_data['V_diff_3'] = data['V'].diff(3)
 
 # === Feature temporali ===
-#lagged_data['hour'] = data.index.hour
+lagged_data['hour'] = data.index.hour
 #lagged_data['is_night'] = lagged_data['hour'].apply(lambda x: 1 if x < 6 else 0)
-#lagged_data['weekday'] = data.index.weekday
+lagged_data['weekday'] = data.index.weekday
 #lagged_data['is_weekend'] = lagged_data['weekday'].apply(lambda x: 1 if x >= 5 else 0)
 
 # === Pulizia finale ===

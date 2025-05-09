@@ -80,12 +80,37 @@ def load_and_prepare_data(data_dir, prefecture_code, station_code):
     data['datetime'] = pd.to_datetime(data.apply(adjust_datetime, axis=1), format='%Y-%m-%d %H:%M')
     data.set_index('datetime', inplace=True)
 
-    # Pulizia righe con NaN solo sulle colonne numeriche
     numeric_items = [item for item in valid_items if item != WD_COLUMN]
+
+    """
+    # Pulizia righe con NaN solo sulle colonne numeriche
     before_drop = len(data)
     data.dropna(subset=numeric_items, inplace=True)
     after_drop = len(data)
     logger.info(f"Cleaned data: removed {before_drop - after_drop} rows with missing numeric values.")
+    """
+    # Ricostruzione valori mancanti
+    for col in numeric_items:
+        # Calcolo Z-score per outlier
+        z_scores = np.abs((data[col] - data[col].mean()) / data[col].std())
+        outliers = z_scores > 3
+        if outliers.any():
+            logger.info(f"Outlier detected in '{col}': replacing {outliers.sum()} values.")
+            data.loc[outliers, col] = np.nan  # Imposta gli outlier come NaN
+    
+        # Interpola i NaN in modo lineare
+        before_nan = data[col].isna().sum()
+        data[col] = data[col].interpolate(method='time', limit_direction='both')
+        after_nan = data[col].isna().sum()
+        logger.info(f"'{col}': {before_nan} NaNs -> {after_nan} after interpolation.")
+    
+        # Se ancora ci sono NaN, sostituisci con media o zero
+        if data[col].isna().sum() > 0:
+            data[col].fillna(data[col].mean(), inplace=True)
+            logger.info(f"'{col}': remaining NaNs filled with column mean.")
+    
+    # Per sicurezza, rimuovi righe ancora con NaN (molto rare a questo punto)
+    data.dropna(subset=numeric_items, inplace=True)
 
     if WD_COLUMN in valid_items:
         before_wd_drop = len(data)

@@ -1,3 +1,0 @@
-R² (original scale): 0.000000
-MAE (original scale): 0.352042
-RMSE (original scale): 0.385690

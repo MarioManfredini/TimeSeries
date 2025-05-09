@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from sklearn.preprocessing import MinMaxScaler
 from joblib import load
 import matplotlib.pyplot as plt
 import json
@@ -17,10 +16,10 @@ from utility import load_and_prepare_data
 
 # === Parametri ===
 MODEL_PATH = "lstm_best_model.pth"
-SCALER_PATH = "lstm_scaler.joblib"
+SCALER_INPUT_PATH = "lstm_scaler_input.joblib"
+SCALER_TARGET_PATH = "lstm_scaler_target.joblib"
 PARAMS_PATH = "lstm_best_params.json"
-N_FORECAST = 24
-
+N_FORECAST = 4
 # === Caricamento parametri ===
 with open(PARAMS_PATH, "r", encoding="utf-8") as f:
     params = json.load(f)
@@ -28,7 +27,7 @@ with open(PARAMS_PATH, "r", encoding="utf-8") as f:
 features = params["features"]
 target_item = params["target_item"]
 lag = params["lag"]
-station_code = "38201090"  # Cambia qui per altre stazioni
+station_code = "38205010"
 
 # === Caricamento dati ===
 data_dir = '..\\data\\Ehime\\'
@@ -40,13 +39,19 @@ df[f'{target_item}_diff_1'] = df[target_item].diff(1)
 df[f'{target_item}_lag1'] = df[target_item].shift(1)
 df[f'{target_item}_lag2'] = df[target_item].shift(2)
 df[f'{target_item}_roll_mean_3'] = df[target_item].rolling(window=3).mean()
+df['NO(ppm)_roll_std_6'] = df['NO(ppm)'].rolling(window=6).std()
+df['NO(ppm)_diff_3'] = df['NO(ppm)'].diff(3)
+df['NO(ppm)_roll_mean_3'] = df['NO(ppm)'].rolling(window=3).mean()
+df['NO2(ppm)_roll_std_6'] = df['NO2(ppm)'].rolling(window=6).std()
+df['NO2(ppm)_diff_3'] = df['NO2(ppm)'].diff(3)
+df['NO2(ppm)_roll_mean_3'] = df['NO2(ppm)'].rolling(window=3).mean()
 df['station_id'] = int(station_code)
 
 df_selected = df[features].dropna().copy()
 
 # === Caricamento scaler ===
-scaler = load(SCALER_PATH)
-scaled = scaler.transform(df_selected)
+scaler_input = load(SCALER_INPUT_PATH)
+scaled = scaler_input.transform(df_selected)
 scaled_df = pd.DataFrame(scaled, columns=df_selected.columns)
 
 # === Ultima finestra di input ===
@@ -94,15 +99,14 @@ for step in range(N_FORECAST):
     window = pd.concat([window, pd.DataFrame([new_row])], ignore_index=True)
 
 # === Inversione normalizzazione ===
-target_index = features.index(target_item)
-target_scaler = MinMaxScaler()
-target_scaler.min_ = np.array([scaler.min_[target_index]])
-target_scaler.scale_ = np.array([scaler.scale_[target_index]])
-forecast_pred = target_scaler.inverse_transform(np.array(forecast_scaled).reshape(-1, 1)).flatten()
+# Carica lo scaler del target
+scaler_target = load(SCALER_TARGET_PATH)
 
-# === Valori reali per confronto ===
+forecast_pred = scaler_target.inverse_transform(np.array(forecast_scaled).reshape(-1, 1)).flatten()
+
 true_df = df_selected[target_item].iloc[-N_FORECAST:].reset_index(drop=True)
-true_values = target_scaler.inverse_transform(true_df.values.reshape(-1, 1)).flatten()
+true_scaled = scaled_df[target_item].iloc[-N_FORECAST:].values
+true_values = scaler_target.inverse_transform(true_scaled.reshape(-1, 1)).flatten()
 
 # === Metriche ===
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error

@@ -14,7 +14,7 @@ from utility import load_and_prepare_data
 import json
 
 # === Parametri ===
-N_FORECAST = 2  # ore da predire
+N_FORECAST = 3  # ore da predire
 LAG = 24
 target_item = 'Ox(ppm)'
 

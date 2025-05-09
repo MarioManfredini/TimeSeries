@@ -17,7 +17,7 @@ import json
 
 # === Parametri ===
 MODEL_PATH = "lstm_best_model.pth"
-SCALER_PATH = "lstm_scaler.joblib"
+SCALER_PATH = "lstm_scaler_input.joblib"
 PARAMS_PATH = "lstm_best_params.json"
 
 with open(PARAMS_PATH, "r", encoding="utf-8") as f:
