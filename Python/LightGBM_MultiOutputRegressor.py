@@ -125,11 +125,17 @@ y_true = scaler_y.inverse_transform(y_test)
 plt.figure(figsize=(12, 5))
 t_index = data_model.index[split_index:split_index+len(y_pred)]
 
+# Calcolo MAE e RMSE per ogni passo
+mae_list = []
+rmse_list = []
+
 print("Errore per ciascun passo di previsione (t+1, t+2, ...):")
 for i, col in enumerate(target_cols):
     r2_scores = r2_score(y_true[:, i], y_pred[:, i])
     mae = mean_absolute_error(y_true[:, i], y_pred[:, i])
     rmse = np.sqrt(mean_squared_error(y_true[:, i], y_pred[:, i]))
+    mae_list.append(mae)
+    rmse_list.append(rmse)
     print(f"{col}: R²: {r2_scores:.4f} MAE = {mae:.4f}, RMSE = {rmse:.4f}")
 
 # Etichette per ogni passo di previsione
@@ -147,4 +153,21 @@ for i in range(8):
     plt.tight_layout()
 
 plt.suptitle('Confronto tra valori reali e predetti', fontsize=16, y=1.02)
+plt.show()
+
+# Plot MAE e RMSE
+x = np.arange(len(steps))
+width = 0.35
+
+plt.figure(figsize=(10, 6))
+plt.bar(x - width / 2, mae_list, width, label='MAE', color='skyblue')
+plt.bar(x + width / 2, rmse_list, width, label='RMSE', color='salmon')
+
+plt.xticks(x, steps)
+plt.xlabel('Passo di previsione')
+plt.ylabel('Errore')
+plt.title('MAE e RMSE per ciascun passo di previsione')
+plt.legend()
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.tight_layout()
 plt.show()

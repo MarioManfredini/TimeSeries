@@ -36,7 +36,7 @@ test_ratio = 0.2
 val_ratio = 0.2
 batch_size = 128
 epochs = 30
-learning_rate = 0.0005
+learning_rate = 0.004
 
 # Dataset PyTorch
 class TimeSeriesDataset(Dataset):
@@ -68,31 +68,74 @@ class GRUNet(nn.Module):
 # Carica dati
 df, valid_items = load_and_prepare_data(data_dir, prefecture_code, station_code)
 
-# Crea feature derivate
-for i in range(1, 3):
-    df[f"{target_item}_lag{i}"] = df[target_item].shift(i)
-df[f"{target_item}_diff_1"] = df[target_item].diff(1)
-df[f"{target_item}_roll_mean_3"] = df[target_item].rolling(window=3).mean()
-df["hour_sin"] = np.sin(2 * np.pi * df["時"]/24)
-df["hour_cos"] = np.cos(2 * np.pi * df["時"]/24)
+# Crea feature derivate complete
+lagged_items = [target_item, 'NO(ppm)', 'NO2(ppm)', 'U', 'V']
+lags = 3
+features = []
+for item in lagged_items:
+    for l in range(1, lags + 1):
+        df[f"{item}_lag{l}"] = df[item].shift(l)
+        features.append(f"{item}_lag{l}")
+
+# Medie mobili (rolling mean)
+df[f'{target_item}_roll_mean_3'] = df[target_item].rolling(3).mean()
+df['NO(ppm)_roll_mean_3'] = df['NO(ppm)'].rolling(3).mean()
+df['NO2(ppm)_roll_mean_3'] = df['NO2(ppm)'].rolling(3).mean()
+df['U_roll_mean_3'] = df['U'].rolling(3).mean()
+df['V_roll_mean_3'] = df['V'].rolling(3).mean()
+
+# Deviazioni standard mobili (rolling std)
+df[f'{target_item}_roll_std_6'] = df[target_item].rolling(6).std()
+df['NO(ppm)_roll_std_6'] = df['NO(ppm)'].rolling(6).std()
+df['NO2(ppm)_roll_std_6'] = df['NO2(ppm)'].rolling(6).std()
+df['U_roll_std_6'] = df['U'].rolling(6).std()
+df['V_roll_std_6'] = df['V'].rolling(6).std()
+
+# Differenze temporali
+df[f'{target_item}_diff_1'] = df[target_item].diff(1)
+df[f'{target_item}_diff_2'] = df[target_item].diff(2)
+df[f'{target_item}_diff_3'] = df[target_item].diff(3)
+df['NO(ppm)_diff_3'] = df['NO(ppm)'].diff(3)
+df['NO2(ppm)_diff_3'] = df['NO2(ppm)'].diff(3)
+df['U_diff_3'] = df['U'].diff(3)
+df['V_diff_3'] = df['V'].diff(3)
+
+# Feature temporali
+df["hour_sin"] = np.sin(2 * np.pi * df["時"] / 24)
+df["hour_cos"] = np.cos(2 * np.pi * df["時"] / 24)
 df["dayofweek"] = df.index.dayofweek
 df["is_weekend"] = (df["dayofweek"] >= 5).astype(int)
+
 df.dropna(inplace=True)
 
 # Selezione feature
-features = [
-    f"{target_item}",
-    f"{target_item}_diff_1",
-    f"{target_item}_lag1",
-    f"{target_item}_lag2",
-    f"{target_item}_roll_mean_3",
+data = df[f'{target_item}']
+features += [
+    f'{target_item}_roll_mean_3',
+    'NO(ppm)_roll_mean_3',
+    'NO2(ppm)_roll_mean_3',
+    'U_roll_mean_3',
+    'V_roll_mean_3',
+    f'{target_item}_roll_std_6',
+    'NO(ppm)_roll_std_6',
+    'NO2(ppm)_roll_std_6',
+    'U_roll_std_6',
+    'V_roll_std_6',
+    f'{target_item}_diff_1',
+    f'{target_item}_diff_2',
+    f'{target_item}_diff_3',
+    'NO(ppm)_diff_3',
+    'NO2(ppm)_diff_3',
+    'U_diff_3',
+    'V_diff_3',
     "hour_sin",
     "hour_cos",
     "dayofweek",
     "is_weekend",
-    "NOx(ppm)",
-]
+    ]
+features.insert(0, target_item)  # assicurati che il target sia in prima posizione per y_all
 data = df[features].values
+
 
 # Costruzione sequenze
 X_all, y_all = [], []
@@ -125,7 +168,12 @@ y_val_scaled = scaler_y.transform(y_val_raw)
 y_test_scaled = scaler_y.transform(y_test)
 
 # Salva scaler
-joblib.dump({'X': scaler_X, 'y': scaler_y}, "gru_scaler.save")
+scalers = {
+    "X": scaler_X,
+    "y": scaler_y,
+    "feature_names": features,
+}
+joblib.dump(scalers, "gru_scaler.save")
 
 # DataLoader
 train_loader = DataLoader(TimeSeriesDataset(X_train_scaled, y_train_scaled), batch_size=batch_size, shuffle=False)

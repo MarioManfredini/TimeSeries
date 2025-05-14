@@ -1,0 +1,103 @@
+sequence_length = 48
+forecast_horizon = 3
+batch_size = 128
+hidden_size = 64
+num_layers = 1
+dropout = 0.0
+learning_rate = 0.01
+num_epochs = 100
+patience = 10  # early stopping patience
+
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer,
+    mode='min',        # oppure 'max' se vuoi usarlo su R² (ma 'min' su loss è più stabile)
+    factor=0.5,        # dimezza il learning rate
+    patience=3,        # aspetta n epoche senza miglioramenti
+    min_lr=1e-5        # evita che diventi troppo piccolo
+)
+
+---------------------------------------------------------------------------------
+●MinMaxScaler
+
+Early stopping triggered at epoch 19
+Loaded best model based on validation R².
+Validation R2: 0.6407, RMSE: 0.0093
+Forecast (inverso): [0.03210815 0.02842054 0.02836506]
+
+StandardScaler
+
+Early stopping triggered at epoch 24
+Loaded best model based on validation R².
+Validation R2: 0.6316, RMSE: 0.0094
+Forecast (inverso): [0.03988467 0.03204294 0.02787809]
+
+RobustScaler
+
+Early stopping triggered at epoch 26
+Loaded best model based on validation R².
+Validation R2: 0.6131, RMSE: 0.0097
+Forecast (inverso): [0.03576792 0.0305457  0.02621391]
+
+---------------------------------------------------------------------------------
+Adam
+
+Early stopping triggered at epoch 19
+Loaded best model based on validation R².
+Validation R2: 0.6407, RMSE: 0.0093
+Forecast (inverso): [0.03210815 0.02842054 0.02836506]
+
+AdamW
+
+Early stopping triggered at epoch 19
+Loaded best model based on validation R².
+Validation R2: 0.6437, RMSE: 0.0093
+Forecast (inverso): [0.03173368 0.02836909 0.02796081]
+
+●RMSprop
+
+Epoch 100/100, Loss: 0.0083, R2: 0.6929, RMSE: 0.1117, val_loss=0.0123, lr=0.000625
+Loaded best model based on validation R².
+Validation R2: 0.6929, RMSE: 0.0086
+Forecast (inverso): [0.02193798 0.01679046 0.00924261]
+
+Adagrad
+
+Epoch 100/100, Loss: 0.0094, R2: 0.6881, RMSE: 0.1126, val_loss=0.0124, lr=0.010000
+Loaded best model based on validation R².
+Validation R2: 0.6881, RMSE: 0.0087
+Forecast (inverso): [0.03050799 0.02755686 0.0269122 ]
+
+---------------------------------------------------------------------------------
+num_epochs = 200
+
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer,
+    mode='min',        # oppure 'max' se vuoi usarlo su R² (ma 'min' su loss è più stabile)
+    factor=0.5,        # dimezza il learning rate
+    patience=5,        # aspetta n epoche senza miglioramenti
+    min_lr=1e-5        # evita che diventi troppo piccolo
+)
+
+Early stopping triggered at epoch 193
+Loaded best model based on validation R².
+Validation R2: 0.6985, RMSE: 0.0085
+Forecast (inverso): [0.02070767 0.02306809 0.01410189]
+
+---------------------------------------------------------------------------------
+patience = 7  # early stopping patience
+
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer,
+    mode='min',        # oppure 'max' se vuoi usarlo su R² (ma 'min' su loss è più stabile)
+    factor=0.5,        # dimezza il learning rate
+    patience=3,        # aspetta n epoche senza miglioramenti
+    min_lr=1e-5        # evita che diventi troppo piccolo
+)
+Epoch 200/200, Loss: 0.0075, R2: 0.7084, RMSE: 0.1088, val_loss=0.0117, lr=0.000039
+Loaded best model based on validation R².
+Validation R2: 0.7084, RMSE: 0.0084
+Forecast (inverso): [0.02736241 0.02475977 0.01942729]
+
+
+
+
