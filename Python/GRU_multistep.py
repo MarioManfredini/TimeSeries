@@ -27,7 +27,7 @@ hidden_size = 64
 num_layers = 1
 dropout = 0.0
 learning_rate = 0.01
-num_epochs = 200
+num_epochs = 300
 patience = 7  # early stopping patience
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -72,6 +72,17 @@ class GRUModel(nn.Module):
         out, _ = self.gru(x)
         out = self.fc(out[:, -1, :])
         return out
+
+# ---------------------- Loss Function
+class WeightedMSELoss(nn.Module):
+    def __init__(self, weights):
+        super(WeightedMSELoss, self).__init__()
+        self.weights = torch.tensor(weights).float()
+
+    def forward(self, pred, target):
+        # pred e target hanno shape [batch_size, forecast_horizon]
+        loss = ((pred - target) ** 2) * self.weights.to(pred.device)
+        return loss.mean()
 
 # ---------------------- Early Stopping Training
 def train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs, patience):
@@ -154,6 +165,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, num_epoch
 
 # ---------------------- Data Preprocessing
 df, _ = load_and_prepare_data(data_dir, prefecture_code, station_code)
+
+# usando 'NO(ppm)', 'NO2(ppm)', 'U', 'V' non laggati peggiora
 features = [target_item]
 
 # Feature Engineering
@@ -187,19 +200,18 @@ features += ['hour_sin', 'hour_cos', 'dayofweek', 'is_weekend']
 df.dropna(inplace=True)
 
 # ---------------------- Normalize separatamente
-target_column = features[0]
-target_index = features.index(target_column)
+target_index = features.index(target_item)
 
 scaler_X = MinMaxScaler()
 scaler_y = MinMaxScaler()
 
 X_data = df[features].values
-y_data = df[[target_column]].values  # target reshape (n, 1)
+y_data = df[[target_item]].values  # target reshape (n, 1)
 
 scaled_X = scaler_X.fit_transform(X_data)
 scaled_y = scaler_y.fit_transform(y_data)
 
-# Sovrascrivi solo la colonna target in scaled_X
+# Sovrascrivo solo la colonna target in scaled_X
 scaled_data = scaled_X.copy()
 scaled_data[:, target_index] = scaled_y.flatten()
 
@@ -217,7 +229,7 @@ val_dataset = TimeSeriesDataset(val_data, sequence_length, forecast_horizon)
 test_dataset = TimeSeriesDataset(test_data, sequence_length, forecast_horizon)
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
-val_loader = DataLoader(val_dataset, batch_size=batch_size)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
 # ---------------------- Training
 model = GRUModel(input_size=len(features), hidden_size=hidden_size,
@@ -275,6 +287,24 @@ with torch.no_grad():
 
 forecast_preds = np.concatenate(forecast_preds, axis=0)
 forecast_targets = np.concatenate(forecast_targets, axis=0)
+
+# Calcolo dell'R² per ciascun passo dell'orizzonte di previsione
+r2_per_step = []
+for i in range(forecast_preds.shape[1]):
+    r2 = r2_score(forecast_targets[:, i], forecast_preds[:, i])
+    r2_per_step.append(r2)
+    print(f"R² per T+{i+1}: {r2:.4f}")
+# Etichette per l'asse x
+steps = [f"T+{i+1}" for i in range(forecast_preds.shape[1])]
+# Creazione del grafico
+plt.figure(figsize=(8, 5))
+plt.plot(steps, r2_per_step, marker='o', linestyle='-')
+plt.title("R² per ciascun passo dell'orizzonte di previsione")
+plt.xlabel("Passo di previsione")
+plt.ylabel("R²")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
 
 # Calcola la media su tutte le sequenze previste per ogni passo dell'orizzonte (es: 3 ore)
 mean_preds = forecast_preds.mean(axis=0).reshape(-1, 1)

@@ -71,7 +71,8 @@ lagged_data['U_diff_3'] = data['U'].diff(3)
 lagged_data['V_diff_3'] = data['V'].diff(3)
 
 # === Feature temporali ===
-lagged_data['hour'] = data.index.hour
+lagged_data["hour_sin"] = np.sin(2 * np.pi * data["時"] / 24)
+lagged_data["hour_cos"] = np.cos(2 * np.pi * data["時"] / 24)
 #lagged_data['is_night'] = lagged_data['hour'].apply(lambda x: 1 if x < 6 else 0)
 lagged_data['weekday'] = data.index.weekday
 #lagged_data['is_weekend'] = lagged_data['weekday'].apply(lambda x: 1 if x >= 5 else 0)
