@@ -7,7 +7,7 @@ Created 2025/04/12
 
 import pandas as pd
 import numpy as np
-import lightgbm as lgb
+import xgboost as xgb
 import matplotlib.pyplot as plt
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.preprocessing import MinMaxScaler
@@ -102,13 +102,13 @@ y_train, y_test = y.iloc[:split_index], y.iloc[split_index:]
 
 ###############################################################################
 # === Model Training ===
-base_model = lgb.LGBMRegressor(
-    objective='regression',
-    boosting_type='gbdt',
+base_model = xgb.XGBRegressor(
+    objective='reg:squarederror',
     n_estimators=400,
     learning_rate=0.04,
-    max_depth=-1,
-    random_state=42, # this number is used to seed the C++ code
+    max_depth=6,
+    verbosity=0,
+    random_state=42,
 )
 
 model = MultiOutputRegressor(base_model)
@@ -171,9 +171,9 @@ model_params = {
     "Number of data points in the train set": len(y_train),
     "Number of data points in the test set": len(y_test),
     "Forecast horizon (hours)": forecast_horizon,
-    "Model": "LightGBM",
+    "Model": "XGBoost",
     "Objective": base_model.get_params()['objective'],
-    "Boosting type": base_model.get_params()['boosting_type'],
+    "Booster": base_model.get_params().get('booster', 'gbtree'),
     "Number of estimators": base_model.get_params()['n_estimators'],
     "Learning rate": base_model.get_params()['learning_rate'],
     "Elapsed time": elapsed_time_str,
@@ -187,5 +187,5 @@ errors = [
 ]
 
 # === Save PDF ===
-save_report_to_pdf(f'LightGBM_report_{station_name}_{prefecture_code}_{station_code}_{target_item}.pdf',
+save_report_to_pdf(f'XGBoost_report_{station_name}_{prefecture_code}_{station_code}_{target_item}.pdf',
                    f'{station_name} - オキシダント予測の分析', model_params, errors, figures)

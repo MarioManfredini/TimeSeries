@@ -20,6 +20,24 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 
 ###############################################################################
+def get_station_name(data_dir, station_code):
+    csv_path = os.path.join(data_dir, 'StationId.csv')
+
+    try:
+        df = pd.read_csv(csv_path, encoding='shift_jis', dtype=str, header=None, names=['code', 'name'])
+        match = df[df['code'] == str(station_code)]
+        if not match.empty:
+            return match.iloc[0]['name']
+        else:
+            return None
+    except FileNotFoundError:
+        print(f"File StationId.csv not found in {data_dir}")
+        return None
+    except Exception as e:
+        print(f"Error reading StationId.csv: {e}")
+        return None
+
+###############################################################################
 def load_and_prepare_data(data_dir, prefecture_code, station_code):
     pattern = os.path.join(data_dir, f"*{prefecture_code}_{station_code}.csv")
     file_list = sorted(glob.glob(pattern))
@@ -204,3 +222,4 @@ def calculate_uv(row):
     u = speed * np.sin(angle_rad)
     v = speed * np.cos(angle_rad)
     return pd.Series({'U': u, 'V': v})
+

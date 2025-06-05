@@ -29,7 +29,7 @@ torch.backends.cudnn.benchmark = False
 # Parametri
 data_dir = '..\\data\\Ehime\\'
 prefecture_code = '38'
-station_code = "38205010"
+station_code = "38206050"
 target_item = "Ox(ppm)"
 lag = 24
 test_ratio = 0.2

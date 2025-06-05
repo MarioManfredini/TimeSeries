@@ -6,22 +6,28 @@ Created 2025/04/12
 """
 
 import numpy as np
-from sklearn.metrics import r2_score, mean_squared_error
+from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 from sklearn.preprocessing import MinMaxScaler
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
-from utility import load_and_prepare_data
+from utility import get_station_name, load_and_prepare_data
+from report import save_report_to_pdf, plot_comparison_actual_predicted, plot_error_summary_page
+import time
+
+
+start_time = time.time()
 
 # ---------------------- Config
 data_dir = '..\\data\\Ehime\\'
 prefecture_code = '38'
-station_code = "38205010"
+station_code = "38206050"
+station_name = get_station_name(data_dir, station_code)
 target_item = 'Ox(ppm)'
 
 sequence_length = 48
-forecast_horizon = 3
+forecast_horizon = 24
 batch_size = 128
 hidden_size = 64
 num_layers = 1
@@ -34,7 +40,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 import random
 
-SEED = 42  # o qualsiasi numero fisso
+SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
@@ -148,20 +154,22 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, num_epoch
         model.load_state_dict(best_model_state)
         print("Loaded best model based on validation R².")
 
-    plt.figure(figsize=(8, 5))
-    plt.plot(train_losses, label="Training Loss", marker='o')
-    plt.plot(val_losses, label="Validation Loss", marker='x')
+    # === CREATE FIGURE IN GRAYSCALE, A5 LANDSCAPE ===
+    fig, ax = plt.subplots(figsize=(11.69, 8.27))  # A4 landscape
+    ax.plot(train_losses, label="Training Loss", marker='o', color='dimgray')
+    ax.plot(val_losses, label="Validation Loss", marker='x', color='gray')
     best_epoch = np.argmin(val_losses)
-    plt.axvline(best_epoch, color='red', linestyle='--', label=f"Early stopping @ {best_epoch}")
-    plt.title("Andamento della Loss durante l'addestramento")
-    plt.xlabel("Epoca")
-    plt.ylabel("Loss (MSE)")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
+    ax.axvline(best_epoch, color='lightgray', linestyle='--', label=f"Early stopping @ epoch {best_epoch}")
+    ax.set_title("Training and Validation Loss", fontsize=10)
+    ax.set_xlabel("Epoch", fontsize=9)
+    ax.set_ylabel("Loss (MSE)", fontsize=9)
+    ax.legend(fontsize=8)
+    ax.grid(True, linestyle='--', linewidth=0.5, color='lightgray')
+    ax.tick_params(labelsize=8)
+    fig.tight_layout()
+    plt.close(fig)
 
-    return model
+    return model, fig
 
 # ---------------------- Data Preprocessing
 df, _ = load_and_prepare_data(data_dir, prefecture_code, station_code)
@@ -245,8 +253,8 @@ scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     min_lr=1e-5        # evita che diventi troppo piccolo
 )
 
-model = train_model(model, train_loader, val_loader, criterion, optimizer,
-                    num_epochs=num_epochs, patience=patience)
+model, fig_loss = train_model(model, train_loader, val_loader, criterion, optimizer,
+                              num_epochs=num_epochs, patience=patience)
 
 # ---------------------- Evaluation
 model.eval()
@@ -289,22 +297,17 @@ forecast_preds = np.concatenate(forecast_preds, axis=0)
 forecast_targets = np.concatenate(forecast_targets, axis=0)
 
 # Calcolo dell'R² per ciascun passo dell'orizzonte di previsione
-r2_per_step = []
+r2_list = []
+mae_list = []
+rmse_list = []
 for i in range(forecast_preds.shape[1]):
     r2 = r2_score(forecast_targets[:, i], forecast_preds[:, i])
-    r2_per_step.append(r2)
+    mae = mean_absolute_error(forecast_targets[:, i], forecast_preds[:, i])
+    rmse = np.sqrt(mean_squared_error(forecast_targets[:, i], forecast_preds[:, i]))
+    r2_list.append(r2)
+    mae_list.append(mae)
+    rmse_list.append(rmse)
     print(f"R² per T+{i+1}: {r2:.4f}")
-# Etichette per l'asse x
-steps = [f"T+{i+1}" for i in range(forecast_preds.shape[1])]
-# Creazione del grafico
-plt.figure(figsize=(8, 5))
-plt.plot(steps, r2_per_step, marker='o', linestyle='-')
-plt.title("R² per ciascun passo dell'orizzonte di previsione")
-plt.xlabel("Passo di previsione")
-plt.ylabel("R²")
-plt.grid(True)
-plt.tight_layout()
-plt.show()
 
 # Calcola la media su tutte le sequenze previste per ogni passo dell'orizzonte (es: 3 ore)
 mean_preds = forecast_preds.mean(axis=0).reshape(-1, 1)
@@ -314,15 +317,49 @@ mean_targets = forecast_targets.mean(axis=0).reshape(-1, 1)
 mean_preds_inv = scaler_y.inverse_transform(mean_preds).flatten()
 mean_targets_inv = scaler_y.inverse_transform(mean_targets).flatten()
 
-# Grafico
-plt.figure(figsize=(8, 5))
-plt.plot(mean_targets_inv, label="Valori reali (media)", marker='o')
-plt.plot(mean_preds_inv, label="Valori previsti (media)", marker='x')
-plt.title("Previsione media")
-plt.xlabel("Orizzonte di previsione (ore)")
-plt.ylabel("Ox (ppm)")
-plt.xticks(ticks=range(len(mean_preds_inv)), labels=[f"T+{i+1}" for i in range(len(mean_preds_inv))])
-plt.legend()
-plt.grid(True)
-plt.tight_layout()
-plt.show()
+steps = [f't+{i:02}' for i in range(1, forecast_horizon + 1)]
+target_cols = [f'{target_item}_t+{i+1:02}' for i in range(forecast_horizon)]
+
+figures = []
+
+figs = plot_comparison_actual_predicted(forecast_targets,
+                                        forecast_preds,
+                                        target_cols,
+                                        steps,
+                                        rows_per_page=3)
+figures.extend(figs)
+
+fig = plot_error_summary_page(mae_list, rmse_list, r2_list, steps)
+figures.append(fig)
+
+figures.append(fig_loss)
+
+end_time = time.time()
+elapsed_seconds = int(end_time - start_time)
+elapsed_minutes = elapsed_seconds // 60
+elapsed_seconds_remainder = elapsed_seconds % 60
+elapsed_time_str = f"{elapsed_minutes} min {elapsed_seconds_remainder} sec"
+
+model_params = {
+    "Prefecture code": prefecture_code,
+    "Station code": station_code,
+    "Station name": station_name,
+    "Target item": target_item,
+    "Number of data points in the train set": len(train_data),
+    "Number of data points in the test set": len(test_data),
+    "Forecast horizon (hours)": forecast_horizon,
+    "Model": "GRU",
+    "Number of epochs": num_epochs,
+    "Elapsed time": elapsed_time_str,
+    "Number of used features": len(features),
+    "Features": features,
+}
+
+errors = [
+    (steps[i], r2_score(forecast_targets[:, i], forecast_preds[:, i]), mae_list[i], rmse_list[i])
+    for i in range(forecast_horizon)
+]
+
+# === Save PDF ===
+save_report_to_pdf(f'GRU_report_{station_name}_{prefecture_code}_{station_code}_{target_item}.pdf',
+                   f'{station_name} - オキシダント予測の分析', model_params, errors, figures)
