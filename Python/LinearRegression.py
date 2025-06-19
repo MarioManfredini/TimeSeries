@@ -130,7 +130,6 @@ ax_scatter.tick_params(labelsize=6)
 cbar.ax.tick_params(labelsize=6)
 cbar.set_label(target_item, fontsize=6)
 
-
 # === Predicted vs Actual ===
 gs_sub = GridSpecFromSubplotSpec(2, 1, subplot_spec=gs[2, :], height_ratios=[3, 1], hspace=0.05)
 ax_pred = fig.add_subplot(gs_sub[0])
@@ -190,4 +189,4 @@ with PdfPages(f'LinearRegression_report_{station_name}_{prefecture_code}_{statio
     pdf.savefig(fig)
     plt.close(fig)
 
-print("📄 One-page summary saved as 'summary_report_A4.pdf'")
+print("📄 One-page summary saved")

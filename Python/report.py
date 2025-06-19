@@ -209,7 +209,15 @@ def plot_feature_importance_heatmaps(model, feature_names, target_names, top_n=1
     plt.close(fig)
     return fig
 
-def plot_feature_summary_pages(model, feature_names, target_names, mae_list, rmse_list, r2_list, steps, top_n=10):
+def plot_feature_summary_pages(model,
+                               feature_names,
+                               target_names,
+                               mae_list,
+                               rmse_list,
+                               r2_list,
+                               steps,
+                               has_heatmap=True,
+                               top_n=10):
     pages = []
 
     # --------- Page 1: MAE, RMSE, R² ---------
@@ -217,8 +225,9 @@ def plot_feature_summary_pages(model, feature_names, target_names, mae_list, rms
     pages.append(fig1)
 
     # --------- heatmap calculation ---------
-    fig2 = plot_feature_importance_heatmaps(model, feature_names, target_names, top_n=10)
-    pages.append(fig2)
+    if has_heatmap:
+        fig2 = plot_feature_importance_heatmaps(model, feature_names, target_names, top_n=10)
+        pages.append(fig2)
 
     return pages
 
