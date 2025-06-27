@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 import glob
 import logging
+from datetime import timedelta
 
 ###############################################################################
 # Constants
@@ -18,6 +19,27 @@ WD_COLUMN = 'WD(16Dir)'
 # Imposta il logger
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+
+###############################################################################
+def load_and_prepare_data(data_dir, prefecture_code, station_code, remove_outliers: bool = False):
+    file_list = _get_csv_file_list(data_dir, prefecture_code, station_code)
+    data = _load_csv_files(file_list)
+    valid_items = _filter_valid_columns(data)
+    data = _set_datetime_index(data)
+    numeric_items = [item for item in valid_items if item != WD_COLUMN]
+
+    if remove_outliers:
+        _remove_outliers(data, numeric_items)
+
+    _handle_missing_values(data, numeric_items)
+    data.dropna(subset=numeric_items, inplace=True)
+
+    if WD_COLUMN in valid_items:
+        data = _clean_and_process_wind(data)
+
+    data.sort_index(inplace=True)
+    logger.info(f"Data prepared successfully with {len(data)} rows and {len(valid_items)} valid items.")
+    return data, valid_items
 
 ###############################################################################
 def get_station_name(data_dir, station_code):
@@ -38,14 +60,16 @@ def get_station_name(data_dir, station_code):
         return None
 
 ###############################################################################
-def load_and_prepare_data(data_dir, prefecture_code, station_code):
+def _get_csv_file_list(data_dir, prefecture_code, station_code):
     pattern = os.path.join(data_dir, f"*{prefecture_code}_{station_code}.csv")
     file_list = sorted(glob.glob(pattern))
-
     if not file_list:
         logger.error("No data files found for the specified station.")
         raise FileNotFoundError("No data files found for the specified station.")
+    return file_list
 
+###############################################################################
+def _load_csv_files(file_list):
     data_frames = []
     for file_path in file_list:
         try:
@@ -54,120 +78,38 @@ def load_and_prepare_data(data_dir, prefecture_code, station_code):
             logger.info(f"Loaded: {os.path.basename(file_path)} with {len(df)} records.")
         except Exception as e:
             logger.warning(f"Failed to load {file_path}: {e}")
+    return pd.concat(data_frames, ignore_index=True)
 
-    data = pd.concat(data_frames, ignore_index=True)
-
+###############################################################################
+def _filter_valid_columns(data):
     exclude_fields = ["測定局コード", "日付", "時"]
     potential_items = [col for col in data.columns if col not in exclude_fields]
     valid_items = []
     total_rows = len(data)
 
     wind_directions = [
-        "N", "NNE", "NE", "ENE",
-        "E", "ESE", "SE", "SSE",
-        "S", "SSW", "SW", "WSW",
-        "W", "WNW", "NW", "NNW",
-        "CALM"
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+        "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW", "CALM"
     ]
 
     for item in potential_items:
         if item == WD_COLUMN:
-            valid_values = data[item].isin(wind_directions).sum()
-            valid_ratio = valid_values / total_rows
-
-            if valid_ratio >= 0.20:
-                valid_items.append(item)
-                logger.info(f"'{item}' retained ({valid_ratio:.1%} valid wind direction values).")
-            else:
-                data.drop(columns=[item], inplace=True)
-                logger.warning(f"'{item}' dropped ({valid_ratio:.1%} valid wind directions below threshold).")
-            continue
-
-        data[item] = pd.to_numeric(data[item], errors='coerce')
-        valid_count = data[item].notna().sum()
-        valid_ratio = valid_count / total_rows
+            valid_ratio = data[item].isin(wind_directions).sum() / total_rows
+        else:
+            data[item] = pd.to_numeric(data[item], errors='coerce')
+            valid_ratio = data[item].notna().sum() / total_rows
 
         if valid_ratio >= 0.20:
             valid_items.append(item)
-            logger.info(f"'{item}' retained ({valid_ratio:.1%} valid numeric data).")
+            logger.info(f"'{item}' retained ({valid_ratio:.1%} valid values).")
         else:
             data.drop(columns=[item], inplace=True)
-            logger.warning(f"'{item}' dropped ({valid_ratio:.1%} valid numeric data below threshold).")
+            logger.warning(f"'{item}' dropped ({valid_ratio:.1%} valid values below threshold).")
 
-    # Conversione della colonna '日付' in datetime e set come indice
-    data['datetime'] = pd.to_datetime(data.apply(adjust_datetime, axis=1), format='%Y-%m-%d %H:%M')
-    data.set_index('datetime', inplace=True)
-
-    numeric_items = [item for item in valid_items if item != WD_COLUMN]
-
-    """
-    # Pulizia righe con NaN solo sulle colonne numeriche
-    before_drop = len(data)
-    data.dropna(subset=numeric_items, inplace=True)
-    after_drop = len(data)
-    logger.info(f"Cleaned data: removed {before_drop - after_drop} rows with missing numeric values.")
-    """
-    # Ricostruzione valori mancanti
-    for col in numeric_items:
-        # Calcolo Z-score per outlier
-        z_scores = np.abs((data[col] - data[col].mean()) / data[col].std())
-        outliers = z_scores > 3
-        if outliers.any():
-            logger.info(f"Outlier detected in '{col}': replacing {outliers.sum()} values.")
-            data.loc[outliers, col] = np.nan  # Imposta gli outlier come NaN
-    
-        # Interpola i NaN in modo lineare
-        before_nan = data[col].isna().sum()
-        data[col] = data[col].interpolate(method='time', limit_direction='both')
-        after_nan = data[col].isna().sum()
-        logger.info(f"'{col}': {before_nan} NaNs -> {after_nan} after interpolation.")
-    
-        # Se ancora ci sono NaN, sostituisci con media o zero
-        if data[col].isna().sum() > 0:
-            data[col].fillna(data[col].mean(), inplace=True)
-            logger.info(f"'{col}': remaining NaNs filled with column mean.")
-    
-    # Per sicurezza, rimuovi righe ancora con NaN (molto rare a questo punto)
-    data.dropna(subset=numeric_items, inplace=True)
-
-    if WD_COLUMN in valid_items:
-        before_wd_drop = len(data)
-        data = data[data[WD_COLUMN].isin(wind_directions)]
-        after_wd_drop = len(data)
-        logger.info(f"{WD_COLUMN} cleaned: removed {before_wd_drop - after_wd_drop} rows with invalid wind directions.")
-
-    # Calcolo U/V se 'WD(16Dir)' è presente
-    if WD_COLUMN in valid_items:
-        data['WD_degrees'] = data[WD_COLUMN].map(direction_to_degrees)
-
-        if 'WS(m/s)' in data.columns:
-            data['WS(m/s)'] = pd.to_numeric(data['WS(m/s)'], errors='coerce')
-
-        if 'WS(m/s)' in data.columns and 'WD_degrees' in data.columns:
-            # Prepara le colonne U e V con zeri
-            data['U'] = 0.0
-            data['V'] = 0.0
-        
-            # Identifica i record validi con direzione non-NaN (quindi non 'CALM')
-            valid_wind_mask = data['WD_degrees'].notna()
-        
-            # Calcola i componenti solo dove ha senso
-            angle_rad = np.deg2rad(data.loc[valid_wind_mask, 'WD_degrees'])
-            ws_values = data.loc[valid_wind_mask, 'WS(m/s)']
-        
-            data.loc[valid_wind_mask, 'U'] = ws_values * np.sin(angle_rad)
-            data.loc[valid_wind_mask, 'V'] = ws_values * np.cos(angle_rad)
-        
-            logger.info("Wind components U and V calculated (including calm wind as 0).")
-
-
-    data.sort_index(inplace=True)
-    logger.info(f"Data prepared successfully with {len(data)} rows and {len(valid_items)} valid items.")
-
-    return data, valid_items
+    return valid_items
 
 ###############################################################################
-def adjust_datetime(row: pd.Series) -> str:
+def _adjust_datetime(row: pd.Series) -> str:
     if row['時'] == 24:
         new_date: pd.Timestamp = row['日付'] + pd.Timedelta(days=1)
         new_hour: str = '00'
@@ -176,20 +118,34 @@ def adjust_datetime(row: pd.Series) -> str:
         new_hour = str(row['時']).zfill(2)
     return f"{new_date.strftime('%Y-%m-%d')} {new_hour}:00"
 
+def _set_datetime_index(data):
+    data['datetime'] = pd.to_datetime(data.apply(_adjust_datetime, axis=1), format='%Y-%m-%d %H:%M')
+    data.set_index('datetime', inplace=True)
+    return data
 
 ###############################################################################
-# Conversion table from wind direction to degrees
-wind_directions = [
-    "N", "NNE", "NE", "ENE",
-    "E", "ESE", "SE", "SSE",
-    "S", "SSW", "SW", "WSW",
-    "W", "WNW", "NW", "NNW",
-    "CALM"
-]
+def _remove_outliers(data, numeric_items):
+    for col in numeric_items:
+        z_scores = np.abs((data[col] - data[col].mean()) / data[col].std())
+        outliers = z_scores > 3
+        if outliers.any():
+            logger.info(f"Outlier detected in '{col}': replacing {outliers.sum()} values.")
+            data.loc[outliers, col] = np.nan
 
 ###############################################################################
-# === Funzione per convertire direzione (stringa) in angolo gradi ===
-def direction_to_degrees(direction):
+def _handle_missing_values(data, numeric_items):
+    for col in numeric_items:
+        before_nan = data[col].isna().sum()
+        data[col] = data[col].interpolate(method='time', limit_direction='both')
+        after_nan = data[col].isna().sum()
+        logger.info(f"'{col}': {before_nan} NaNs -> {after_nan} after interpolation.")
+
+        if after_nan > 0:
+            data[col].fillna(data[col].mean(), inplace=True)
+            logger.info(f"'{col}': remaining NaNs filled with column mean.")
+
+###############################################################################
+def _direction_to_degrees(direction):
     mapping = {
         "N": 0, "NNE": 22.5, "NE": 45, "ENE": 67.5, "E": 90,
         "ESE": 112.5, "SE": 135, "SSE": 157.5, "S": 180,
@@ -198,28 +154,90 @@ def direction_to_degrees(direction):
     }
     return mapping.get(direction, np.nan)
 
+###############################################################################
+def _clean_and_process_wind(data):
+    wind_directions = [
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+        "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW", "CALM"
+    ]
+    before = len(data)
+    data = data[data[WD_COLUMN].isin(wind_directions)].copy()
+    after = len(data)
+    logger.info(f"{WD_COLUMN} cleaned: removed {before - after} rows with invalid wind directions.")
+
+    if 'WS(m/s)' in data.columns:
+        data['WS(m/s)'] = pd.to_numeric(data['WS(m/s)'], errors='coerce')
+        data['WD_degrees'] = data[WD_COLUMN].map(_direction_to_degrees)
+        valid_mask = data['WD_degrees'].notna()
+        angle_rad = np.deg2rad(data.loc[valid_mask, 'WD_degrees'])
+        ws_values = data.loc[valid_mask, 'WS(m/s)']
+        data['U'] = 0.0
+        data['V'] = 0.0
+        data.loc[valid_mask, 'U'] = ws_values * np.sin(angle_rad)
+        data.loc[valid_mask, 'V'] = ws_values * np.cos(angle_rad)
+        logger.info("Wind components U and V calculated.")
+    
+    return data
 
 ###############################################################################
-# Conversion table from wind direction to degrees
-wind_direction_degrees = {
-    "N": 0, "NNE": 22.5, "NE": 45, "ENE": 67.5, "E": 90,
-    "ESE": 112.5, "SE": 135, "SSE": 157.5, "S": 180,
-    "SSW": 202.5, "SW": 225, "WSW": 247.5, "W": 270,
-    "WNW": 292.5, "NW": 315, "NNW": 337.5
-}
+def load_ox_time_series(data_dir, stations_df, from_datetime, prefecture_code, hours=48):
+    """
+    Estrae i valori di Ox, WS, WD per le ultime `hours` ore da `from_datetime`
+    """
+    to_datetime = from_datetime + timedelta(hours=hours)
+    all_data = []
 
-###############################################################################
-# Function to calculate U and V
-def calculate_uv(row):
-    direction = row[WD_COLUMN]
-    speed = row['WS(m/s)']
-    if direction == 'CALM' or pd.isna(direction) or pd.isna(speed):
-        return pd.Series({'U': 0.0, 'V': 0.0})
-    angle_deg = wind_direction_degrees.get(direction, np.nan)
-    if np.isnan(angle_deg):
-        return pd.Series({'U': np.nan, 'V': np.nan})
-    angle_rad = np.deg2rad(angle_deg)
-    u = speed * np.sin(angle_rad)
-    v = speed * np.cos(angle_rad)
-    return pd.Series({'U': u, 'V': v})
+    for _, row in stations_df.iterrows():
+        station_code = row['station_code']
+        station_name = row['station_name']
+        lat = row['latitude']
+        lon = row['longitude']
 
+        # Determina gli anni e i mesi necessari
+        months_needed = pd.date_range(from_datetime, to_datetime, freq='MS').to_period('M').unique()
+        for period in months_needed:
+            ym_str = f"{period.year:04d}{period.month:02d}"
+            filename = f"{ym_str}_{prefecture_code}_{station_code}.csv"
+            file_path = os.path.join(data_dir, filename)
+
+            if not os.path.exists(file_path):
+                print(f"[WARN] File mancante: {file_path}")
+                continue
+
+            try:
+                df = pd.read_csv(file_path, encoding='cp932')
+                df['datetime'] = pd.to_datetime(
+                    df['日付'] + ' ' + df['時'].astype(str).str.zfill(2),
+                    format='%Y/%m/%d %H',
+                    errors='coerce'
+                )
+                df = df.dropna(subset=['datetime'])
+                df = df[(df['datetime'] >= from_datetime) & (df['datetime'] < to_datetime)]
+
+                # Pulisce e converte i valori
+                df['Ox(ppm)'] = pd.to_numeric(df['Ox(ppm)'], errors='coerce')
+                df['WS(m/s)'] = pd.to_numeric(df['WS(m/s)'], errors='coerce')
+                df = df[df['Ox(ppm)'].notna()]
+
+                df['WD_degrees'] = df['WD(16Dir)'].map(_direction_to_degrees)
+                df['U'] = df['WS(m/s)'] * np.sin(np.deg2rad(df['WD_degrees']))
+                df['V'] = df['WS(m/s)'] * np.cos(np.deg2rad(df['WD_degrees']))
+
+                for _, r in df.iterrows():
+                    all_data.append({
+                        'station_code': station_code,
+                        'station_name': station_name,
+                        'latitude': lat,
+                        'longitude': lon,
+                        'datetime': r['datetime'],
+                        'Ox(ppm)': r['Ox(ppm)'],
+                        'WS(m/s)': r['WS(m/s)'],
+                        'WD(16Dir)': r['WD(16Dir)'],
+                        'U': r['U'],
+                        'V': r['V']
+                    })
+
+            except Exception as e:
+                print(f"[ERROR] Errore nel file {file_path}: {e}")
+
+    return all_data
