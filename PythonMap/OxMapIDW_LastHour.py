@@ -9,7 +9,14 @@ import pandas as pd
 import numpy as np
 import folium
 from folium.raster_layers import ImageOverlay
-from map_utils import load_latest_ox_values, compute_wind_uv, compute_bounds_from_df, generate_idw_image, draw_arrow_wind_vectors, generate_idw_image_with_labels_only, generate_idw_loocv_error_image, generate_distance_mask, generate_ox_confidence_overlay_image
+from map_utils import (
+                       load_latest_ox_values,
+                       compute_wind_uv,
+                       compute_bounds_from_df,
+                       generate_idw_image_with_labels_only,
+                       generate_idw_loocv_error_image,
+                       generate_ox_confidence_overlay_image
+                       )
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from scipy.spatial import cKDTree
 from map_report import save_idw_report_pdf, capture_html_map_screenshot, save_idw_formula_as_jpg

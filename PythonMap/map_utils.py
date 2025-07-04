@@ -15,7 +15,7 @@ from folium.plugins import PolyLineTextPath
 from matplotlib.patches import Rectangle
 from matplotlib.colors import Normalize
 from geopy.distance import geodesic
-from PIL import Image
+from pykrige.ok import OrdinaryKriging
 
 ###############################################################################
 def load_latest_ox_values(data_dir, stations_df, year, month, prefecture_code):
@@ -51,6 +51,8 @@ def load_latest_ox_values(data_dir, stations_df, year, month, prefecture_code):
             df = df.sort_values("datetime")
 
             last_ox = df["Ox(ppm)"].iloc[-1]
+            last_no = df["NO(ppm)"].iloc[-1]
+            last_no2 = df["NO2(ppm)"].iloc[-1]
             
             # Wind speed & direction (if available)
             if 'WS(m/s)' in df.columns and 'WD(16Dir)' in df.columns:
@@ -60,12 +62,16 @@ def load_latest_ox_values(data_dir, stations_df, year, month, prefecture_code):
                 last_wd = df['WD(16Dir)'].iloc[-1]
                 ox_data[station_code] = {
                     'Ox(ppm)': float(last_ox),
+                    'NO(ppm)': float(last_no),
+                    'NO2(ppm)': float(last_no2),
                     'WS(m/s)': float(last_ws),
                     'WD(16Dir)': last_wd
                 }
             else:
                 ox_data[station_code] = {
                     'Ox(ppm)': float(last_ox),
+                    'NO(ppm)': float(last_no),
+                    'NO2(ppm)': float(last_no2),
                     'WS(m/s)': np.nan,
                     'WD(16Dir)': np.nan
                 }
@@ -657,4 +663,265 @@ def generate_ox_confidence_overlay_image(
     plt.savefig(output_file, bbox_inches='tight', pad_inches=0)
     plt.close()
     print(f"✅ Saved image with overlays to {output_file}")
+
+###############################################################################
+def get_variogram_parameters(model_name):
+    if model_name == 'linear':
+        return {'slope': 0.0005, 'nugget': 0.00001}
+    else:
+        return {'sill': 0.0001, 'range': 0.1, 'nugget': 0.00001}
+
+###############################################################################
+def generate_simple_kriging_grid(
+    df,
+    bounds,
+    num_cells=300,
+    variogram_model='linear'
+):
+    """
+    Compute a 2D grid of interpolated Ox(ppm) values using Simple Kriging.
+
+    Parameters:
+        df: DataFrame with 'longitude', 'latitude', 'Ox(ppm)'
+        bounds: ((lat_min, lon_min), (lat_max, lon_max))
+        num_cells: number of grid cells along the longitude axis
+        variogram_model: variogram model name (e.g. 'linear', 'power', 'gaussian')
+
+    Returns:
+        ox_grid: interpolated grid (lat_cells x lon_cells)
+        (lat_cells, lon_cells): dimensions of the grid
+        grid_x, grid_y: meshgrid arrays (lon and lat coordinates)
+    """
+    # === Extract data ===
+    x = df['longitude'].values
+    y = df['latitude'].values
+    z = df['Ox(ppm)'].values
+    (lat_min, lon_min), (lat_max, lon_max) = bounds
+
+    # === Compute grid dimensions to preserve square cells ===
+    lon_cells = num_cells
+    lat_range = lat_max - lat_min
+    lon_range = lon_max - lon_min
+    lat_cells = int(lon_cells * lat_range / lon_range)
+
+    grid_lon = np.linspace(lon_min, lon_max, lon_cells)
+    grid_lat = np.linspace(lat_min, lat_max, lat_cells)
+    grid_x, grid_y = np.meshgrid(grid_lon, grid_lat)
+
+    # === Kriging ===
+    params = get_variogram_parameters(variogram_model)
+    OK = OrdinaryKriging(
+        x, y, z,
+        variogram_model=variogram_model,
+        variogram_parameters=params,
+        verbose=False,
+        enable_plotting=False,
+    )
+
+    z_interp, _ = OK.execute('grid', grid_lon, grid_lat)
+    ox_grid = np.array(z_interp)  # shape: (lat_cells, lon_cells)
+
+    return ox_grid, (lat_cells, lon_cells), grid_x, grid_y
+
+###############################################################################
+def generate_ox_kriging_confidence_overlay_image(
+    df,
+    bounds,
+    ox_grid,
+    ox_min,
+    ox_max,
+    output_file='ox_kriging_confidence.png',
+    max_distance_km=20,
+    cmap_name='Reds'
+):
+    """
+    Visualizes a Kriging result with a semi-transparent gray overlay in low-confidence areas
+    based on distance from measurement stations.
+
+    Parameters:
+        df: DataFrame with 'longitude', 'latitude', 'Ox(ppm)', and optional 'U', 'V' columns
+        bounds: ((lat_min, lon_min), (lat_max, lon_max))
+        ox_grid: 2D NumPy array with interpolated Ox(ppm) from Kriging (no flip)
+        ox_min, ox_max: color scale min/max
+        output_file: path to output PNG
+        max_distance_km: max distance considered reliable
+        cmap_name: colormap for Ox
+    """
+    x = df['longitude'].values
+    y = df['latitude'].values
+    (lat_min, lon_min), (lat_max, lon_max) = bounds
+
+    lat_cells, lon_cells = ox_grid.shape
+
+    # === Colormap ===
+    norm = np.clip((ox_grid - ox_min) / (ox_max - ox_min), 0, 1)
+    cmap = plt.get_cmap(cmap_name)
+    color_img = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
+
+    # === Confidence from distance ===
+    from scipy.spatial import cKDTree
+
+    grid_x, grid_y = np.meshgrid(
+        np.linspace(lon_min, lon_max, lon_cells),
+        np.linspace(lat_min, lat_max, lat_cells)
+    )
+    grid_coords = np.vstack((grid_x.ravel(), grid_y.ravel())).T
+
+    tree = cKDTree(np.vstack((x, y)).T)
+    dists, _ = tree.query(grid_coords, k=1)
+    dist_km = dists * 111  # ~111 km per degree
+    confidence = np.clip(1 - dist_km / max_distance_km, 0, 1).reshape((lat_cells, lon_cells))
+
+    # === Confidence to gray alpha
+    low, high = 0.45, 0.55
+    gray_alpha = np.zeros_like(confidence)
+    gray_alpha[confidence <= low] = 180
+    gray_alpha[confidence >= high] = 0
+    fade = (high - confidence[(confidence > low) & (confidence < high)]) / (high - low)
+    gray_alpha[(confidence > low) & (confidence < high)] = (fade * 180).astype(np.uint8)
+
+    # === Gray overlay blending
+    gray_overlay = np.zeros((lat_cells, lon_cells, 4), dtype=np.uint8)
+    gray_overlay[..., :3] = 200
+    gray_overlay[..., 3] = gray_alpha.astype(np.uint8)
+
+    rgba = np.zeros((lat_cells, lon_cells, 4), dtype=np.uint8)
+    rgba[..., :3] = color_img
+    rgba[..., 3] = 255
+
+    fg_alpha = gray_overlay[..., 3:4] / 255.0
+    rgba[..., :3] = (
+        gray_overlay[..., :3] * fg_alpha + rgba[..., :3] * (1 - fg_alpha)
+    ).astype(np.uint8)
+
+    # === Plot ===
+    fig, ax = plt.subplots(figsize=(8, 8 * (lat_max - lat_min) / (lon_max - lon_min)), dpi=200)
+    ax.imshow(rgba, extent=(lon_min, lon_max, lat_min, lat_max), origin='lower')
+    ax.axis('off')
+
+    # === Bounding box
+    rect = Rectangle(
+        (x.min(), y.min()),
+        x.max() - x.min(),
+        y.max() - y.min(),
+        linewidth=1.5,
+        edgecolor='black',
+        linestyle='--',
+        facecolor='none'
+    )
+    ax.add_patch(rect)
+
+    # === Stations
+    ax.scatter(x, y, c='black', edgecolor='white', s=60, label='Stations')
+
+    # === Wind
+    if 'U' in df.columns and 'V' in df.columns:
+        ax.quiver(
+            df['longitude'], df['latitude'],
+            df['U'], df['V'],
+            angles='xy', scale_units='xy', scale=100.0,
+            color='blue', width=0.003, label='Wind'
+        )
+
+    plt.tight_layout()
+    plt.savefig(output_file, bbox_inches='tight', pad_inches=0)
+    plt.close()
+    print(f"✅ Saved Kriging confidence overlay image to {output_file}")
+
+###############################################################################
+def generate_rf_prediction_image(
+    df,
+    bounds,
+    model,
+    features,
+    ox_min,
+    ox_max,
+    output_file="ox_rf_prediction.png",
+    num_cells=300,
+    cmap_name="Reds"
+):
+    """
+    Generates and saves a spatial prediction image using a trained Random Forest model.
+
+    Parameters:
+        df: pandas DataFrame containing the station data and required features
+        bounds: ((lat_min, lon_min), (lat_max, lon_max)) bounds for the map
+        model: trained RandomForestRegressor
+        features: list of feature names to use in prediction
+        ox_min, ox_max: min and max values for color scaling
+        output_file: path to save the output PNG image
+        num_cells: number of grid cells along the x-axis
+        cmap_name: matplotlib colormap name
+    """
+    (lat_min, lon_min), (lat_max, lon_max) = bounds
+
+    # Griglia con celle quadrate
+    lon_cells = num_cells
+    lat_range = lat_max - lat_min
+    lon_range = lon_max - lon_min
+    lat_cells = int(lon_cells * lat_range / lon_range)
+
+    grid_x, grid_y = np.meshgrid(
+        np.linspace(lon_min, lon_max, lon_cells),
+        np.linspace(lat_min, lat_max, lat_cells)
+    )
+    grid_coords = np.vstack((grid_x.ravel(), grid_y.ravel())).T
+
+    # Costruzione DataFrame dei dati da predire
+    grid_df = pd.DataFrame(grid_coords, columns=['longitude', 'latitude'])
+
+    # Per semplicità: U e V medi
+    mean_u = df['U'].mean() if 'U' in df.columns else 0
+    mean_v = df['V'].mean() if 'V' in df.columns else 0
+    grid_df['U'] = mean_u
+    grid_df['V'] = mean_v
+
+    for col in ['NO(ppm)', 'NO2(ppm)']:
+        grid_df[col] = df[col].mean() if col in df.columns else 0
+
+    # Predizione RF
+    X_pred = grid_df[features].values
+    y_pred = model.predict(X_pred)
+    grid_z = y_pred.reshape((lat_cells, lon_cells))  # no flip
+
+    # Normalizzazione per colore
+    norm = np.clip((grid_z - ox_min) / (ox_max - ox_min), 0, 1)
+    cmap = plt.get_cmap(cmap_name)
+    color_img = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
+
+    # Plot
+    fig, ax = plt.subplots(figsize=(8, 8 * lat_range / lon_range), dpi=200)
+    ax.imshow(color_img, extent=(lon_min, lon_max, lat_min, lat_max), origin='lower')
+    ax.axis('off')
+
+    # Bounding box
+    x = df['longitude'].values
+    y = df['latitude'].values
+    rect = Rectangle(
+        (x.min(), y.min()),
+        x.max() - x.min(),
+        y.max() - y.min(),
+        linewidth=1.5,
+        edgecolor='black',
+        linestyle='--',
+        facecolor='none'
+    )
+    ax.add_patch(rect)
+
+    # Stazioni
+    ax.scatter(x, y, c='black', edgecolor='white', s=60, label='Stations')
+
+    # Vento
+    if 'U' in df.columns and 'V' in df.columns:
+        ax.quiver(
+            df['longitude'], df['latitude'],
+            df['U'], df['V'],
+            angles='xy', scale_units='xy', scale=100.0,
+            color='blue', width=0.003, label='Wind'
+        )
+
+    plt.tight_layout()
+    plt.savefig(output_file, bbox_inches='tight', pad_inches=0)
+    plt.close()
+    print(f"✅ RF prediction image saved to: {output_file}")
 
