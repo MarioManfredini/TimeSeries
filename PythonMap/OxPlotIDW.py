@@ -13,7 +13,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial import cKDTree
-from map_utils import load_latest_ox_values, compute_wind_uv
+from map_utils import load_hour_ox_values, compute_wind_uv
 
 ###############################################################################
 # Settings
@@ -26,12 +26,14 @@ csv_path = os.path.join(data_dir, station_coordinates)
 df = pd.read_csv(csv_path, skipinitialspace=True)
 
 # Load latest Ox(ppm) values for each station
-ox_data = load_latest_ox_values(
-    data_dir=data_dir,
-    stations_df=df,
+ox_data = load_hour_ox_values(
+    data_dir,
+    df,
+    prefecture_code=prefecture_code,
     year=2025,
     month=5,
-    prefecture_code=prefecture_code
+    day=12,
+    hour=12
 )
 
 # Filter stations with Ox data

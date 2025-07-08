@@ -90,14 +90,14 @@ def save_idw_report_pdf(
     formula_image_path='formula_idw.jpg',
     html_screenshot_path='map_screenshot.jpg',
     idw_labels_image_path='ox_idw_labels.png',
+    additional_image_path='idw_loocv_plot.jpg',
     title="IDW Cross-validation Report"
 ):
     page_width, page_height = landscape(A4)
     c = canvas.Canvas(output_path, pagesize=(page_width, page_height))
     margin = 15 * mm
-    col_split = page_width / 2  # 50% table, 50% image
+    col_split = page_width / 2
 
-    # 1/3 for text/metrics, 2/3 for map
     col1_w = page_width * (1 / 3)
     col2_w = page_width * (2 / 3)
 
@@ -105,7 +105,7 @@ def save_idw_report_pdf(
     c.setFont("Helvetica-Bold", 15)
     c.drawString(margin, page_height - margin, title)
 
-    # === Formula image ===
+    # === Formula ===
     if formula_image_path and os.path.exists(formula_image_path):
         formula_w = col_split - 2 * margin
         formula_h = 40 * mm
@@ -115,7 +115,7 @@ def save_idw_report_pdf(
         c.setFont("Helvetica", 10)
         c.drawString(margin, page_height - margin - 10 * mm, "(Formula image missing)")
 
-    # === IDW image with station labels ===
+    # === Static IDW map with station labels ===
     if idw_labels_image_path and os.path.exists(idw_labels_image_path):
         img = Image.open(idw_labels_image_path)
         img_w, img_h = img.size
@@ -134,7 +134,7 @@ def save_idw_report_pdf(
         c.setFont("Helvetica", 10)
         c.drawString(col_split + margin, page_height / 2, "(Map image missing)")
 
-    # === Map image (screenshot) on right 2/3 ===
+    # === Map Screenshot (top-right) ===
     map_x = col1_w + margin
     map_max_w = col2_w - 2 * margin
     map_max_h = 90 * mm
@@ -151,9 +151,9 @@ def save_idw_report_pdf(
                     width=new_w, height=new_h, preserveAspectRatio=True, mask="auto")
     else:
         c.setFont("Helvetica", 10)
-        c.drawString(col_split + margin, page_height / 2, "(Screenshot missing)")
+        c.drawString(map_x, page_height / 2, "(Screenshot missing)")
 
-    # === Table ===
+    # === Table of results (bottom-left) ===
     table_x = map_x
     table_y = y_map - 5 * mm
     c.setFont("Helvetica-Bold", 8)
@@ -164,10 +164,30 @@ def save_idw_report_pdf(
         line = f"{k:<2d}  {power:<5.2f}   {rmse:<8.5f}  {mae:<8.5f}  {r2:<6.3f}"
         c.drawString(table_x, y, line)
 
+    # === Additional image (bottom-right) ===
+    if additional_image_path and os.path.exists(additional_image_path):
+        img = Image.open(additional_image_path)
+        img_w, img_h = img.size
+        aspect = img_h / img_w
+
+        add_img_w = map_max_w / 2
+        add_img_h = add_img_w * aspect
+        if add_img_h > 80 * mm:
+            add_img_h = 80 * mm
+            add_img_w = add_img_h / aspect
+
+        x_add_img = map_x + map_max_w - add_img_w
+        y_add_img = table_y - add_img_h
+        c.drawImage(additional_image_path, x_add_img, y_add_img,
+                    width=add_img_w, height=add_img_h,
+                    preserveAspectRatio=True, mask='auto')
+    else:
+        c.setFont("Helvetica", 10)
+        c.drawString(map_x + map_max_w - 50 * mm, margin + 5 * mm, "(Additional image missing)")
+
     c.showPage()
     c.save()
     print(f"✅ PDF report saved to: {output_path}")
-
 
 ###############################################################################
 def save_kriging_formula_as_jpg(filename="formula_kriging.jpg"):
@@ -218,6 +238,7 @@ def save_kriging_report_pdf(
     formula_image_path='formula_kriging.jpg',
     html_screenshot_path='map_screenshot.jpg',
     kriging_labels_image_path='ox_kriging_with_labels_only.png',
+    additional_image_path='ox_kriging_loocv.jpg',
     title="Simple Kriging Cross-validation Report"
 ):
     from reportlab.pdfgen import canvas
@@ -296,6 +317,27 @@ def save_kriging_report_pdf(
         line = f"{model:<10s} {transform:<10s}  {rmse:<8.5f}  {mae:<8.5f}  {r2:<6.3f}"
         c.drawString(table_x, y, line)
 
+    # === Additional image (bottom-right) ===
+    if additional_image_path and os.path.exists(additional_image_path):
+        img = Image.open(additional_image_path)
+        img_w, img_h = img.size
+        aspect = img_h / img_w
+
+        add_img_w = map_max_w / 2
+        add_img_h = add_img_w * aspect
+        if add_img_h > 80 * mm:
+            add_img_h = 80 * mm
+            add_img_w = add_img_h / aspect
+
+        x_add_img = map_x + map_max_w - add_img_w
+        y_add_img = table_y - add_img_h
+        c.drawImage(additional_image_path, x_add_img, y_add_img,
+                    width=add_img_w, height=add_img_h,
+                    preserveAspectRatio=True, mask='auto')
+    else:
+        c.setFont("Helvetica", 10)
+        c.drawString(map_x + map_max_w - 50 * mm, margin + 5 * mm, "(Additional image missing)")
+
     c.showPage()
     c.save()
     print(f"✅ PDF report saved to: {output_path}")
@@ -307,6 +349,7 @@ def save_rf_report_pdf(
     formula_image_path='formula_rf.jpg',
     html_screenshot_path='map_screenshot.jpg',
     rf_labels_image_path='ox_rf_labels.png',
+    additional_image_path='ox_rf_loocv.jpg',
     title="Random Forest Cross-validation Report"
 ):
     """
@@ -391,6 +434,27 @@ def save_rf_report_pdf(
         y = table_y - (i + 1) * 4 * mm
         line = f"{rmse:<8.5f}  {mae:<8.5f}  {r2:<6.3f}  {desc}"
         c.drawString(table_x, y, line)
+
+    # === Additional image (bottom-right) ===
+    if additional_image_path and os.path.exists(additional_image_path):
+        img = Image.open(additional_image_path)
+        img_w, img_h = img.size
+        aspect = img_h / img_w
+
+        add_img_w = map_max_w / 2
+        add_img_h = add_img_w * aspect
+        if add_img_h > 80 * mm:
+            add_img_h = 80 * mm
+            add_img_w = add_img_h / aspect
+
+        x_add_img = map_x + map_max_w - add_img_w
+        y_add_img = table_y - add_img_h
+        c.drawImage(additional_image_path, x_add_img, y_add_img,
+                    width=add_img_w, height=add_img_h,
+                    preserveAspectRatio=True, mask='auto')
+    else:
+        c.setFont("Helvetica", 10)
+        c.drawString(map_x + map_max_w - 50 * mm, margin + 5 * mm, "(Additional image missing)")
 
     c.showPage()
     c.save()

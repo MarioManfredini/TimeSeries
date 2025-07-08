@@ -16,15 +16,22 @@ from matplotlib.patches import Rectangle
 from matplotlib.colors import Normalize
 from geopy.distance import geodesic
 from pykrige.ok import OrdinaryKriging
+from datetime import datetime
 
 ###############################################################################
-def load_latest_ox_values(data_dir, stations_df, year, month, prefecture_code):
+def load_hour_ox_values(data_dir, stations_df, prefecture_code, year, month, day=None, hour=None):
     """
-    For each station, load the latest available Ox(ppm) value
-    from the corresponding CSV file in the folder.
+    For each station, load the Ox(ppm), NO(ppm), NO2(ppm), WS(m/s), and WD(16Dir)
+    values for a specific date and hour if provided, otherwise take the latest available.
+
+    Parameters:
+        data_dir: directory containing the CSVs
+        stations_df: DataFrame with a 'station_code' column
+        year, month: int, year and month to load
+        prefecture_code: str
+        day, hour: optional int, specific date/hour to filter (e.g., day=29, hour=23)
     """
     ox_data = {}
-
     ym_str = f"{year:04d}{month:02d}"
 
     for _, row in stations_df.iterrows():
@@ -38,48 +45,54 @@ def load_latest_ox_values(data_dir, stations_df, year, month, prefecture_code):
 
         try:
             df = pd.read_csv(file_path, encoding='cp932')
-
             df["Ox(ppm)"] = pd.to_numeric(df["Ox(ppm)"], errors='coerce')
+            df["NO(ppm)"] = pd.to_numeric(df["NO(ppm)"], errors='coerce')
+            df["NO2(ppm)"] = pd.to_numeric(df["NO2(ppm)"], errors='coerce')
+
+            # Drop missing Ox
             df = df[df["Ox(ppm)"].notna()]
 
+            # Datetime parsing
             df["datetime"] = pd.to_datetime(
                 df["日付"] + " " + df["時"].astype(str).str.zfill(2),
-                errors='coerce',
-                format='%Y/%m/%d %H'
+                format='%Y/%m/%d %H',
+                errors='coerce'
             )
             df = df.dropna(subset=["datetime"])
-            df = df.sort_values("datetime")
 
-            last_ox = df["Ox(ppm)"].iloc[-1]
-            last_no = df["NO(ppm)"].iloc[-1]
-            last_no2 = df["NO2(ppm)"].iloc[-1]
-            
-            # Wind speed & direction (if available)
-            if 'WS(m/s)' in df.columns and 'WD(16Dir)' in df.columns:
-                df['WS(m/s)'] = pd.to_numeric(df['WS(m/s)'], errors='coerce')
-                df = df[df['WS(m/s)'].notna()]
-                last_ws = df['WS(m/s)'].iloc[-1]
-                last_wd = df['WD(16Dir)'].iloc[-1]
-                ox_data[station_code] = {
-                    'Ox(ppm)': float(last_ox),
-                    'NO(ppm)': float(last_no),
-                    'NO2(ppm)': float(last_no2),
-                    'WS(m/s)': float(last_ws),
-                    'WD(16Dir)': last_wd
-                }
+            if day is not None and hour is not None:
+                # Filter for specified day/hour
+                dt_filter = datetime(year, month, day, hour)
+                row_match = df[df["datetime"] == dt_filter]
+                if row_match.empty:
+                    print(f"[WARN] No data for {dt_filter} at station {station_code}")
+                    continue
+                target_row = row_match.iloc[0]
             else:
-                ox_data[station_code] = {
-                    'Ox(ppm)': float(last_ox),
-                    'NO(ppm)': float(last_no),
-                    'NO2(ppm)': float(last_no2),
-                    'WS(m/s)': np.nan,
-                    'WD(16Dir)': np.nan
-                }
+                # Use the latest available row
+                df = df.sort_values("datetime")
+                target_row = df.iloc[-1]
+
+            # Wind (optional)
+            if 'WS(m/s)' in df.columns and 'WD(16Dir)' in df.columns:
+                ws = pd.to_numeric(target_row['WS(m/s)'], errors='coerce')
+                wd = target_row['WD(16Dir)'] if pd.notna(target_row['WD(16Dir)']) else np.nan
+            else:
+                ws, wd = np.nan, np.nan
+
+            ox_data[station_code] = {
+                'Ox(ppm)': float(target_row["Ox(ppm)"]),
+                'NO(ppm)': float(target_row["NO(ppm)"]),
+                'NO2(ppm)': float(target_row["NO2(ppm)"]),
+                'WS(m/s)': float(ws) if pd.notna(ws) else np.nan,
+                'WD(16Dir)': wd
+            }
 
         except Exception as e:
-            print(f"[ERROR] Error reading file {file_path}: {e}")
+            print(f"[ERROR] Error reading {file_path}: {e}")
 
     return ox_data
+
 
 ###############################################################################
 def _direction_to_degrees(direction):
@@ -93,11 +106,22 @@ def _direction_to_degrees(direction):
 
 ###############################################################################
 def compute_wind_uv(ws_series, wd_series):
-    wd_deg = wd_series.map(_direction_to_degrees)
+    # Pre-assegno U e V a zero dove la direzione è CALM
+    u = np.zeros(len(ws_series))
+    v = np.zeros(len(ws_series))
+
+    # Maschera delle righe non-CALM
+    is_calm = wd_series.str.upper() == "CALM"
+    not_calm = ~is_calm
+
+    # Conversione direzione → angolo
+    wd_deg = wd_series[not_calm].map(_direction_to_degrees)
     angle_rad = np.deg2rad(wd_deg)
-    u = ws_series * np.sin(angle_rad)
-    v = ws_series * np.cos(angle_rad)
-    return u, v
+
+    u[not_calm] = ws_series[not_calm] * np.sin(angle_rad)
+    v[not_calm] = ws_series[not_calm] * np.cos(angle_rad)
+
+    return pd.Series(u, index=ws_series.index), pd.Series(v, index=ws_series.index)
 
 ###############################################################################
 def create_geojson_from_records(records, opacity=0.8):
@@ -199,91 +223,6 @@ def compute_global_ox_range(records, lower_percentile=5, upper_percentile=95):
     ox_min = np.percentile(all_ox_values, lower_percentile)
     ox_max = np.percentile(all_ox_values, upper_percentile)
     return ox_min, ox_max
-
-###############################################################################
-def generate_idw_image_with_labels_only(df, bounds, ox_min, ox_max, k=7, power=1, output_file='ox_idw_labels.png', num_cells=800):
-    """
-    Generate an IDW interpolated grayscale image with station locations and Ox labels (no map, no wind).
-
-    Parameters:
-        df: DataFrame with columns ['longitude', 'latitude', 'Ox(ppm)']
-        bounds: tuple ((lat_min, lon_min), (lat_max, lon_max))
-        output_file: path to save resulting PNG
-        num_cells: resolution of interpolation grid
-        ox_min, ox_max: fixed min/max values for grayscale scale
-    """
-    if ox_min is None or ox_max is None:
-        raise ValueError("ox_min and ox_max must be provided to ensure consistent grayscale.")
-
-    x = df['longitude'].values
-    y = df['latitude'].values
-    z = df['Ox(ppm)'].values
-
-    (lat_min, lon_min), (lat_max, lon_max) = bounds
-
-    # === Create interpolation grid ===
-    grid_x, grid_y = np.meshgrid(
-        np.linspace(lon_min, lon_max, num_cells),
-        np.linspace(lat_min, lat_max, num_cells)
-    )
-    grid_coords = np.vstack((grid_x.ravel(), grid_y.ravel())).T
-
-    # === IDW interpolation ===
-    tree = cKDTree(np.vstack((x, y)).T)
-    distances, idx = tree.query(grid_coords, k=k)
-    weights = 1 / (distances + 1e-12) ** power
-    values = np.sum(weights * z[idx], axis=1) / np.sum(weights, axis=1)
-    grid_z = values.reshape((num_cells, num_cells))
-
-    # === Plot ===
-    aspect_ratio = (lat_max - lat_min) / (lon_max - lon_min)
-    width = 6
-    height = width * aspect_ratio
-
-    fig, ax = plt.subplots(figsize=(width, height), dpi=200)
-    ax.axis('off')
-
-    ax.imshow(
-        grid_z,
-        extent=(lon_min, lon_max, lat_min, lat_max),
-        origin='lower',
-        vmin=ox_min,
-        vmax=ox_max,
-        cmap='Greys',
-        alpha=0.9,
-        aspect='auto'
-    )
-
-    # Bounding box of measured area
-    rect = Rectangle(
-        (x.min(), y.min()),
-        x.max() - x.min(),
-        y.max() - y.min(),
-        linewidth=1.5,
-        edgecolor='black',
-        linestyle='--',
-        facecolor='none'
-    )
-    ax.add_patch(rect)
-
-    # === Station markers and labels ===
-    ax.scatter(x, y, c='black', edgecolor='white', s=50, zorder=5)
-
-    for i, row in df.iterrows():
-        ax.text(
-            row['longitude'] + 0.01,
-            row['latitude'] + 0.005,
-            f"{row['Ox(ppm)']:.3f}",
-            fontsize=6,
-            color='black',
-            bbox=dict(facecolor='white', edgecolor='none', alpha=0.7, pad=1),
-            zorder=6
-        )
-
-    plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
-    plt.savefig(output_file, transparent=True, bbox_inches='tight', pad_inches=0)
-    plt.close()
-    print(f"✅ IDW label image saved to: {output_file}")
 
 ###############################################################################
 def generate_idw_image(df, bounds, ox_min, ox_max, k=7, power=1, output_file='ox_idw.png', num_cells=800):
@@ -827,101 +766,4 @@ def generate_ox_kriging_confidence_overlay_image(
     plt.savefig(output_file, bbox_inches='tight', pad_inches=0)
     plt.close()
     print(f"✅ Saved Kriging confidence overlay image to {output_file}")
-
-###############################################################################
-def generate_rf_prediction_image(
-    df,
-    bounds,
-    model,
-    features,
-    ox_min,
-    ox_max,
-    output_file="ox_rf_prediction.png",
-    num_cells=300,
-    cmap_name="Reds"
-):
-    """
-    Generates and saves a spatial prediction image using a trained Random Forest model.
-
-    Parameters:
-        df: pandas DataFrame containing the station data and required features
-        bounds: ((lat_min, lon_min), (lat_max, lon_max)) bounds for the map
-        model: trained RandomForestRegressor
-        features: list of feature names to use in prediction
-        ox_min, ox_max: min and max values for color scaling
-        output_file: path to save the output PNG image
-        num_cells: number of grid cells along the x-axis
-        cmap_name: matplotlib colormap name
-    """
-    (lat_min, lon_min), (lat_max, lon_max) = bounds
-
-    # Griglia con celle quadrate
-    lon_cells = num_cells
-    lat_range = lat_max - lat_min
-    lon_range = lon_max - lon_min
-    lat_cells = int(lon_cells * lat_range / lon_range)
-
-    grid_x, grid_y = np.meshgrid(
-        np.linspace(lon_min, lon_max, lon_cells),
-        np.linspace(lat_min, lat_max, lat_cells)
-    )
-    grid_coords = np.vstack((grid_x.ravel(), grid_y.ravel())).T
-
-    # Costruzione DataFrame dei dati da predire
-    grid_df = pd.DataFrame(grid_coords, columns=['longitude', 'latitude'])
-
-    # Per semplicità: U e V medi
-    mean_u = df['U'].mean() if 'U' in df.columns else 0
-    mean_v = df['V'].mean() if 'V' in df.columns else 0
-    grid_df['U'] = mean_u
-    grid_df['V'] = mean_v
-
-    for col in ['NO(ppm)', 'NO2(ppm)']:
-        grid_df[col] = df[col].mean() if col in df.columns else 0
-
-    # Predizione RF
-    X_pred = grid_df[features].values
-    y_pred = model.predict(X_pred)
-    grid_z = y_pred.reshape((lat_cells, lon_cells))  # no flip
-
-    # Normalizzazione per colore
-    norm = np.clip((grid_z - ox_min) / (ox_max - ox_min), 0, 1)
-    cmap = plt.get_cmap(cmap_name)
-    color_img = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
-
-    # Plot
-    fig, ax = plt.subplots(figsize=(8, 8 * lat_range / lon_range), dpi=200)
-    ax.imshow(color_img, extent=(lon_min, lon_max, lat_min, lat_max), origin='lower')
-    ax.axis('off')
-
-    # Bounding box
-    x = df['longitude'].values
-    y = df['latitude'].values
-    rect = Rectangle(
-        (x.min(), y.min()),
-        x.max() - x.min(),
-        y.max() - y.min(),
-        linewidth=1.5,
-        edgecolor='black',
-        linestyle='--',
-        facecolor='none'
-    )
-    ax.add_patch(rect)
-
-    # Stazioni
-    ax.scatter(x, y, c='black', edgecolor='white', s=60, label='Stations')
-
-    # Vento
-    if 'U' in df.columns and 'V' in df.columns:
-        ax.quiver(
-            df['longitude'], df['latitude'],
-            df['U'], df['V'],
-            angles='xy', scale_units='xy', scale=100.0,
-            color='blue', width=0.003, label='Wind'
-        )
-
-    plt.tight_layout()
-    plt.savefig(output_file, bbox_inches='tight', pad_inches=0)
-    plt.close()
-    print(f"✅ RF prediction image saved to: {output_file}")
 
