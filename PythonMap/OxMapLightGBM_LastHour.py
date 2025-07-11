@@ -2,7 +2,7 @@
 """
 Created: 2025/06/29
 Author: Mario
-Description: Spatial Random Forest with LOOCV, map rendering, and PDF report.
+Description: Spatial LightGBM with LOOCV, map rendering, and PDF report.
 """
 import os
 import pandas as pd
@@ -15,7 +15,7 @@ from map_utils import (
     compute_bounds_from_df
 )
 from map_report import capture_html_map_screenshot, save_rf_report_pdf, save_rf_formula_as_jpg
-from sklearn.ensemble import RandomForestRegressor
+from lightgbm import LGBMRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
@@ -43,7 +43,7 @@ def plot_rf_loocv_results(rmse, mae, r2, trues, preds, output_path="ox_rf_loocv.
     axs[0].plot([trues.min(), trues.max()], [trues.min(), trues.max()], 'r--')
     axs[0].set_xlabel("True Ox(ppm)")
     axs[0].set_ylabel("Predicted Ox(ppm)")
-    axs[0].set_title(f"Random Forest LOOCV - True vs Predicted\nRMSE={rmse:.5f}, MAE={mae:.5f}, R²={r2:.3f}")
+    axs[0].set_title(f"LightGBM LOOCV - True vs Predicted\nRMSE={rmse:.5f}, MAE={mae:.5f}, R²={r2:.3f}")
     axs[0].grid(True)
     axs[0].axis("equal")
 
@@ -59,7 +59,7 @@ def plot_rf_loocv_results(rmse, mae, r2, trues, preds, output_path="ox_rf_loocv.
     plt.tight_layout()
     plt.savefig(output_path, bbox_inches="tight", pad_inches=0.1)
     plt.close()
-    print(f"✅ Random Forest LOOCV plot saved to: {output_path}")
+    print(f"✅ LightGBM LOOCV plot saved to: {output_path}")
 
 ###############################################################################
 def generate_rf_image_with_labels_only(
@@ -74,13 +74,13 @@ def generate_rf_image_with_labels_only(
     num_cells=800
 ):
     """
-    Generate a grayscale image with predicted Ox values using Random Forest.
+    Generate a grayscale image with predicted Ox values using LightGBM.
 
     Parameters:
         df: DataFrame with required features and columns ['longitude', 'latitude', 'Ox(ppm)']
         bounds: ((lat_min, lon_min), (lat_max, lon_max))
         ox_min, ox_max: fixed grayscale range for consistency
-        model: trained RandomForestRegressor
+        model: trained LGBMRegressor
         scaler: fitted scaler (StandardScaler or MinMaxScaler)
         features: list of features used during training
         output_file: path to save PNG
@@ -124,11 +124,18 @@ def generate_rf_image_with_labels_only(
                 row.append(0)  # default if feature not available
         features_grid.append(row)
 
-    features_grid = np.array(features_grid)
-
-    # === Apply scaling
+    full_grid_df = pd.DataFrame(features_grid, columns=[f for f in features if f in ['longitude', 'latitude'] or f in mean_values])
+    
+    # Aggiungi eventuali colonne mancanti con valore 0
+    for f in features:
+        if f not in full_grid_df.columns:
+            full_grid_df[f] = 0  # valore predefinito
+    
+    # Riordina le colonne secondo l’ordine originale
+    full_grid_df = full_grid_df[features]
+    
     try:
-        features_scaled = scaler.transform(features_grid)
+        features_scaled = pd.DataFrame(scaler.transform(full_grid_df), columns=full_grid_df.columns)
     except Exception as e:
         print(f"[ERROR] Failed to apply scaler to feature grid: {e}")
         return
@@ -187,7 +194,7 @@ def generate_rf_image_with_labels_only(
     plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
     plt.savefig(output_file, transparent=True, bbox_inches='tight', pad_inches=0)
     plt.close()
-    print(f"✅ RF label image saved to: {output_file}")
+    print(f"✅ Label image saved to: {output_file}")
 
 
 ###############################################################################
@@ -205,12 +212,12 @@ def generate_ox_rf_confidence_overlay_image(
     scaler=None
 ):
     """
-    Generates and saves a spatial prediction image using a trained Random Forest model.
+    Generates and saves a spatial prediction image using a trained LightGBM model.
 
     Parameters:
         df: pandas DataFrame containing the station data and required features
         bounds: ((lat_min, lon_min), (lat_max, lon_max)) bounds for the map
-        model: trained RandomForestRegressor
+        model: trained LGBMRegressor
         features: list of feature names to use in prediction
         ox_min, ox_max: min and max values for color scaling
         output_file: path to save the output PNG image
@@ -248,8 +255,11 @@ def generate_ox_rf_confidence_overlay_image(
         'is_weekend': df['is_weekend'].mode()[0] if 'is_weekend' in df.columns else 0,
     }
 
-    for col, value in default_features.items():
-        grid_df[col] = value
+    extra_df = pd.DataFrame(
+        {col: value for col, value in default_features.items()},
+        index=grid_df.index
+    )
+    grid_df = pd.concat([grid_df, extra_df], axis=1)
 
     # === Usa solo le feature che esistono davvero nella griglia
     valid_features = [f for f in features if f in grid_df.columns]
@@ -257,19 +267,23 @@ def generate_ox_rf_confidence_overlay_image(
     if missing:
         print(f"[WARN] Missing features in grid, skipped: {missing}")
 
-    # === Previsione RF ===
-    X_pred = grid_df[valid_features].values
-
+    missing_features = [f for f in features if f not in grid_df.columns]
+    if missing_features:
+        missing_df = pd.DataFrame(0, index=grid_df.index, columns=missing_features)
+        grid_df = pd.concat([grid_df, missing_df], axis=1)
+    
+    # Ordina le colonne nello stesso ordine del training
+    X_pred_df = grid_df[features].copy()
+    
+    # === Applica scaler
     if scaler is not None:
-        # Attenzione: scaler è stato addestrato con tutte le feature.
-        # È necessario selezionare le stesse colonne (in ordine) anche per lo scaling.
         try:
-            feature_idx = [features.index(f) for f in valid_features]
-            X_pred = scaler.transform(np.zeros((1, len(features))))[:, feature_idx]
-            X_pred = scaler.transform(grid_df[valid_features])
+            X_pred = pd.DataFrame(scaler.transform(X_pred_df), columns=X_pred_df.columns)
         except Exception as e:
             print(f"[ERROR] Failed to apply scaler: {e}")
             return
+    else:
+        X_pred = X_pred_df.values
 
     y_pred = model.predict(X_pred)
     grid_z = y_pred.reshape((lat_cells, lon_cells))
@@ -336,7 +350,7 @@ def generate_ox_rf_confidence_overlay_image(
     plt.tight_layout()
     plt.savefig(output_file, bbox_inches='tight', pad_inches=0)
     plt.close()
-    print(f"✅ RF prediction image saved to: {output_file}")
+    print(f"✅ LGBM prediction image saved to: {output_file}")
 
 
 
@@ -374,20 +388,29 @@ exclude_cols = ['datetime', 'WD(16Dir)', 'station_code', 'station_name']
 features = [col for col in df.columns if col not in exclude_cols and np.issubdtype(df[col].dtype, np.number)]
 
 target = 'Ox(ppm)'
-X = df[features].values
+X = df[features]
 y = df[target].values
 
 # === Scaler initialization ===
 scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
+X_scaled_df = pd.DataFrame(scaler.fit_transform(X), columns=features)
 
 preds, trues = [], []
 for i in range(len(df)):
-    X_train = np.delete(X_scaled, i, axis=0)
+    X_train = X_scaled_df.drop(i)
     y_train = np.delete(y, i)
-    X_test = X_scaled[i].reshape(1, -1)
+    X_test = X_scaled_df.iloc[[i]]
 
-    model = RandomForestRegressor(n_estimators=500, random_state=42)
+    model = LGBMRegressor(
+        objective='regression',
+        boosting_type='gbdt',
+        n_estimators=400,
+        learning_rate=0.02,
+        max_depth=-1,
+        random_state=42, # this number is used to seed the C++ code
+        n_jobs=-1
+    )
+
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
 
@@ -398,18 +421,18 @@ mse = mean_squared_error(trues, preds)
 rmse = mse ** 0.5
 mae = mean_absolute_error(trues, preds)
 r2 = r2_score(trues, preds)
-print("\n✅ Random Forest LOOCV:")
+print("\n✅ LightGBM LOOCV:")
 print(f"RMSE: {rmse:.5f}, MAE: {mae:.5f}, R²: {r2:.3f}")
 
 # === LOOCV ===
-ox_rf_loocv="ox_rf_loocv.png"
-plot_rf_loocv_results(rmse, mae, r2, trues, preds, ox_rf_loocv)
+ox_lgbm_loocv="ox_lgbm_loocv.png"
+plot_rf_loocv_results(rmse, mae, r2, trues, preds, ox_lgbm_loocv)
 
 # === Generate image ===
 bounds = compute_bounds_from_df(df, margin_ratio=0.10)
 ox_min = np.percentile(df['Ox(ppm)'], 5)
 ox_max = np.percentile(df['Ox(ppm)'], 95)
-rf_image_path = "ox_rf_prediction.png"
+lgbm_image_path = "ox_lgbm_prediction.png"
 generate_ox_rf_confidence_overlay_image(
     df,
     bounds,
@@ -417,7 +440,7 @@ generate_ox_rf_confidence_overlay_image(
     features,
     ox_min,
     ox_max,
-    output_file=rf_image_path,
+    output_file=lgbm_image_path,
     num_cells=300,
     max_distance_km=15,
     cmap_name="Reds",
@@ -429,21 +452,21 @@ center_lat = df['latitude'].mean()
 center_lon = df['longitude'].mean()
 m = folium.Map(location=[center_lat, center_lon], zoom_start=10)
 image_overlay = ImageOverlay(
-    name="RF Predicted Ox(ppm)",
-    image=rf_image_path,
+    name="LGBM Predicted Ox(ppm)",
+    image=lgbm_image_path,
     bounds=[[bounds[0][0], bounds[0][1]], [bounds[1][0], bounds[1][1]]],
     opacity=0.7
 )
 image_overlay.add_to(m)
 
-html_file = "OxMapRF_LastHour.html"
+html_file = "OxMapLGBM_LastHour.html"
 m.save(html_file)
 print(f"Map saved to: {html_file}")
 
-formula_image_path = 'formula_rf.jpg'
+formula_image_path = 'formula_lgbm.jpg'
 save_rf_formula_as_jpg(formula_image_path)
 
-rf_labels_image_path = 'ox_rf_labels.png'
+lgbm_labels_image_path = 'ox_lgbm_labels.png'
 generate_rf_image_with_labels_only(
     df,
     bounds,
@@ -452,21 +475,20 @@ generate_rf_image_with_labels_only(
     model,
     scaler,
     features,
-    output_file=rf_labels_image_path,
+    output_file=lgbm_labels_image_path,
     num_cells=300
 )
 
-screenshot_path = "map_rf_screenshot.jpg"
+screenshot_path = "map_lgbm_screenshot.jpg"
 capture_html_map_screenshot(html_file, screenshot_path)
 
 # === Report PDF ===
 save_rf_report_pdf(
-    output_path="RF_Report.pdf",
+    output_path="LightGBM_Report.pdf",
     results=[(rmse, mae, r2, f"All stations ({year}/{month}/{day} {hour}H)")],
     formula_image_path=formula_image_path,
     html_screenshot_path=screenshot_path,
-    rf_labels_image_path=rf_labels_image_path,
-    additional_image_path=ox_rf_loocv,
-    title="Random Forest Spatial Interpolation Report"
+    rf_labels_image_path=lgbm_labels_image_path,
+    additional_image_path=ox_lgbm_loocv,
+    title=f"LightGBM Interpolation - {year}/{month}/{day} {hour:02d}H"
 )
-

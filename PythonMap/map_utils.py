@@ -93,6 +93,139 @@ def load_hour_ox_values(data_dir, stations_df, prefecture_code, year, month, day
 
     return ox_data
 
+###############################################################################
+def load_station_temporal_features(
+    data_dir,
+    stations_df,
+    prefecture_code,
+    year,
+    month,
+    day,
+    hour,
+    lags=24,
+    target_item="Ox(ppm)"
+):
+    def safe_last(series):
+        """Return last element of a Series or np.nan if empty."""
+        return series.iloc[-1] if not series.empty else np.nan
+
+    results = []
+    datetime_target = datetime(year, month, day, hour)
+    base_features = ['NO(ppm)', 'NO2(ppm)', 'U', 'V']
+    all_items = [target_item] + base_features
+
+    for _, row in stations_df.iterrows():
+        station_code = row['station_code']
+        ym_str = f"{year:04d}{month:02d}"
+        filename = f"{ym_str}_{prefecture_code}_{station_code}.csv"
+        file_path = os.path.join(data_dir, filename)
+
+        if not os.path.exists(file_path):
+            print(f"[WARN] File not found: {file_path}")
+            continue
+
+        try:
+            df = pd.read_csv(file_path, encoding='cp932')
+            df["datetime"] = pd.to_datetime(
+                df["日付"] + " " + df["時"].astype(str).str.zfill(2),
+                format='%Y/%m/%d %H',
+                errors='coerce'
+            )
+            df = df.dropna(subset=["datetime"])
+            df = df.set_index("datetime").sort_index()
+
+            if datetime_target not in df.index:
+                print(f"[WARN] Missing datetime {datetime_target} for station {station_code}")
+                continue
+            
+            # Valid data check
+            cols_to_check = ['Ox(ppm)', 'NO(ppm)', 'NO2(ppm)']
+            has_only_dashes = True
+            
+            for col in cols_to_check:
+                if col in df.columns:
+                    # Controlla se esistono righe valide (non '-')
+                    non_dash_values = df[col].astype(str).str.strip() != "-"
+                    if non_dash_values.any():
+                        has_only_dashes = False
+                        break
+            
+            if has_only_dashes:
+                print(f"[WARN] Station {station_code} contains only missing values ('-'). Consider deleting its files.")
+                continue
+
+            # Calcolo U/V dal vento (se disponibili)
+            if 'WS(m/s)' in df.columns and 'WD(16Dir)' in df.columns:
+                df['U'], df['V'] = compute_wind_uv(df['WS(m/s)'], df['WD(16Dir)'])
+            else:
+                df['U'] = np.nan
+                df['V'] = np.nan
+
+            # Conversione colonne in float
+            for col in all_items:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+
+            df = df.dropna(subset=all_items)
+            df = df.loc[:datetime_target]  # until target date
+
+            if df.empty:
+                print(f"[WARN] No usable data before {datetime_target} for station {station_code}")
+                continue
+
+            feature_row = {
+                "station_code": station_code,
+                "datetime": datetime_target,
+            }
+
+            # Coordinates
+            feature_row["longitude"] = row["longitude"]
+            feature_row["latitude"] = row["latitude"]
+
+            # target item
+            feature_row[target_item] = safe_last(df[target_item])
+            
+            # Add current values of base features (not just derived ones)
+            for item in base_features:
+                if item in df.columns and not df[item].empty:
+                    feature_row[item] = df[item].iloc[-1]
+                else:
+                    feature_row[item] = np.nan
+
+            for item in all_items:
+                # Lag features
+                for l in range(1, lags + 1):
+                    col = f"{item}_lag{l}"
+                    shifted = df[item].shift(l)
+                    feature_row[col] = safe_last(shifted)
+
+                # Rolling mean/std
+                roll_mean = df[item].shift(1).rolling(3).mean()
+                roll_std = df[item].shift(1).rolling(6).std()
+                feature_row[f"{item}_roll_mean_3"] = safe_last(roll_mean)
+                feature_row[f"{item}_roll_std_6"] = safe_last(roll_std)
+
+            # Differenze sul target
+            for d in [1, 2, 3]:
+                diff_series = df[target_item].shift(1).diff(d)
+                feature_row[f"{target_item}_diff_{d}"] = safe_last(diff_series)
+
+            for item in base_features:
+                diff_series = df[item].shift(1).diff(3)
+                feature_row[f"{item}_diff_3"] = safe_last(diff_series)
+
+            # Time-based features
+            feature_row["hour_sin"] = np.sin(2 * np.pi * hour / 24)
+            feature_row["hour_cos"] = np.cos(2 * np.pi * hour / 24)
+            feature_row["dayofweek"] = datetime_target.weekday()
+            feature_row["is_weekend"] = int(datetime_target.weekday() >= 5)
+
+            results.append(feature_row)
+
+        except Exception as e:
+            print(f"[ERROR] Error processing {station_code}: {e}")
+
+    return pd.DataFrame(results)
 
 ###############################################################################
 def _direction_to_degrees(direction):
@@ -106,22 +239,34 @@ def _direction_to_degrees(direction):
 
 ###############################################################################
 def compute_wind_uv(ws_series, wd_series):
-    # Pre-assegno U e V a zero dove la direzione è CALM
-    u = np.zeros(len(ws_series))
-    v = np.zeros(len(ws_series))
+    # Convert wind direction to uppercase strings, remove whitespace
+    wd_series_clean = wd_series.astype(str).str.strip().str.upper()
 
-    # Maschera delle righe non-CALM
-    is_calm = wd_series.str.upper() == "CALM"
+    # Convert wind speed to numeric, coerce invalids to NaN
+    ws_numeric = pd.to_numeric(ws_series, errors='coerce')
+
+    # Pre-assign U and V as NaN
+    u = pd.Series(np.nan, index=ws_series.index)
+    v = pd.Series(np.nan, index=ws_series.index)
+
+    # Identify non-CALM directions
+    is_calm = wd_series_clean == "CALM"
     not_calm = ~is_calm
 
-    # Conversione direzione → angolo
-    wd_deg = wd_series[not_calm].map(_direction_to_degrees)
-    angle_rad = np.deg2rad(wd_deg)
+    # Convert to degrees using mapping
+    wd_deg = wd_series_clean[not_calm].map(_direction_to_degrees)
 
-    u[not_calm] = ws_series[not_calm] * np.sin(angle_rad)
-    v[not_calm] = ws_series[not_calm] * np.cos(angle_rad)
+    # Drop invalid directions
+    valid_deg = wd_deg.notna() & ws_numeric[not_calm].notna()
 
-    return pd.Series(u, index=ws_series.index), pd.Series(v, index=ws_series.index)
+    angle_rad = np.deg2rad(wd_deg[valid_deg])
+    ws_valid = ws_numeric[not_calm][valid_deg]
+
+    # Compute U, V only for valid rows
+    u.loc[valid_deg.index[valid_deg]] = ws_valid * np.sin(angle_rad)
+    v.loc[valid_deg.index[valid_deg]] = ws_valid * np.cos(angle_rad)
+
+    return u, v
 
 ###############################################################################
 def create_geojson_from_records(records, opacity=0.8):
