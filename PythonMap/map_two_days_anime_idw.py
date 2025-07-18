@@ -203,6 +203,7 @@ setupAnimation();
 data_dir = '..\\data\\Osaka\\'
 prefecture_code = '27'
 station_coordinates = 'Stations_Ox.csv'
+target = 'Ox(ppm)'
 csv_path = os.path.join(data_dir, station_coordinates)
 
 stations_df = pd.read_csv(csv_path, skipinitialspace=True)
@@ -227,6 +228,7 @@ m.save(html_file_name)
 print(f"Map saved to: {html_file_name}")
 
 bounds, ox_min, ox_max = generate_idw_images_by_hour(
+    target,
     records,
     k=7,
     power=1.0,

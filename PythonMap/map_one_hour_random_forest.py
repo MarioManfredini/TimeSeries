@@ -11,10 +11,9 @@ import folium
 from folium.raster_layers import ImageOverlay
 from map_utils import (
     load_station_temporal_features,
-    compute_wind_uv,
     compute_bounds_from_df
 )
-from map_report import capture_html_map_screenshot, save_rf_report_pdf, save_rf_formula_as_jpg
+from map_report import capture_html_map_screenshot, save_map_report_pdf, save_rf_formula_as_jpg
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import matplotlib.pyplot as plt
@@ -205,12 +204,12 @@ def generate_ox_rf_confidence_overlay_image(
     scaler=None
 ):
     """
-    Generates and saves a spatial prediction image using a trained Random Forest model.
+    Generates and saves a spatial prediction image using a trained model.
 
     Parameters:
         df: pandas DataFrame containing the station data and required features
         bounds: ((lat_min, lon_min), (lat_max, lon_max)) bounds for the map
-        model: trained RandomForestRegressor
+        model: trained model
         features: list of feature names to use in prediction
         ox_min, ox_max: min and max values for color scaling
         output_file: path to save the output PNG image
@@ -248,8 +247,11 @@ def generate_ox_rf_confidence_overlay_image(
         'is_weekend': df['is_weekend'].mode()[0] if 'is_weekend' in df.columns else 0,
     }
 
-    for col, value in default_features.items():
-        grid_df[col] = value
+    extra_df = pd.DataFrame(
+        {col: value for col, value in default_features.items()},
+        index=grid_df.index
+    )
+    grid_df = pd.concat([grid_df, extra_df], axis=1)
 
     # === Usa solo le feature che esistono davvero nella griglia
     valid_features = [f for f in features if f in grid_df.columns]
@@ -257,19 +259,23 @@ def generate_ox_rf_confidence_overlay_image(
     if missing:
         print(f"[WARN] Missing features in grid, skipped: {missing}")
 
-    # === Previsione RF ===
-    X_pred = grid_df[valid_features].values
-
+    missing_features = [f for f in features if f not in grid_df.columns]
+    if missing_features:
+        missing_df = pd.DataFrame(0, index=grid_df.index, columns=missing_features)
+        grid_df = pd.concat([grid_df, missing_df], axis=1)
+    
+    # Ordina le colonne nello stesso ordine del training
+    X_pred_df = grid_df[features].copy()
+    
+    # === Applica scaler
     if scaler is not None:
-        # Attenzione: scaler è stato addestrato con tutte le feature.
-        # È necessario selezionare le stesse colonne (in ordine) anche per lo scaling.
         try:
-            feature_idx = [features.index(f) for f in valid_features]
-            X_pred = scaler.transform(np.zeros((1, len(features))))[:, feature_idx]
-            X_pred = scaler.transform(grid_df[valid_features])
+            X_pred = pd.DataFrame(scaler.transform(X_pred_df), columns=X_pred_df.columns)
         except Exception as e:
             print(f"[ERROR] Failed to apply scaler: {e}")
             return
+    else:
+        X_pred = X_pred_df.values
 
     y_pred = model.predict(X_pred)
     grid_z = y_pred.reshape((lat_cells, lon_cells))
@@ -336,9 +342,7 @@ def generate_ox_rf_confidence_overlay_image(
     plt.tight_layout()
     plt.savefig(output_file, bbox_inches='tight', pad_inches=0)
     plt.close()
-    print(f"✅ RF prediction image saved to: {output_file}")
-
-
+    print(f"✅ Random Forest prediction image saved to: {output_file}")
 
 ###############################################################################
 
@@ -347,14 +351,15 @@ data_dir = '..\\data\\Osaka\\'
 prefecture_code = '27'
 station_coordinates = 'Stations_Ox.csv'
 csv_path = os.path.join(data_dir, station_coordinates)
+target = 'Ox(ppm)'
+year=2025
+month=5
+day=12
+hour=19
 
 # === Load and prepare data ===
 df = pd.read_csv(csv_path, skipinitialspace=True)
 
-year=2025
-month=5
-day=12
-hour=12
 df = load_station_temporal_features(
     data_dir,
     df,
@@ -364,7 +369,7 @@ df = load_station_temporal_features(
     day,
     hour,
     lags=24,
-    target_item="Ox(ppm)"
+    target_item=target
 )
 
 print("[DEBUG] Final dataframe shape:", df.shape)
@@ -373,7 +378,6 @@ print("[DEBUG] Final dataframe shape:", df.shape)
 exclude_cols = ['datetime', 'WD(16Dir)', 'station_code', 'station_name'] 
 features = [col for col in df.columns if col not in exclude_cols and np.issubdtype(df[col].dtype, np.number)]
 
-target = 'Ox(ppm)'
 X = df[features].values
 y = df[target].values
 
@@ -402,14 +406,14 @@ print("\n✅ Random Forest LOOCV:")
 print(f"RMSE: {rmse:.5f}, MAE: {mae:.5f}, R²: {r2:.3f}")
 
 # === LOOCV ===
-ox_rf_loocv="ox_rf_loocv.png"
+ox_rf_loocv="loocv.png"
 plot_rf_loocv_results(rmse, mae, r2, trues, preds, ox_rf_loocv)
 
 # === Generate image ===
 bounds = compute_bounds_from_df(df, margin_ratio=0.10)
-ox_min = np.percentile(df['Ox(ppm)'], 5)
-ox_max = np.percentile(df['Ox(ppm)'], 95)
-rf_image_path = "ox_rf_prediction.png"
+ox_min = np.percentile(df[target], 5)
+ox_max = np.percentile(df[target], 95)
+rf_image_path = "prediction.png"
 generate_ox_rf_confidence_overlay_image(
     df,
     bounds,
@@ -429,7 +433,7 @@ center_lat = df['latitude'].mean()
 center_lon = df['longitude'].mean()
 m = folium.Map(location=[center_lat, center_lon], zoom_start=10)
 image_overlay = ImageOverlay(
-    name="RF Predicted Ox(ppm)",
+    name=f"Random Forest Predicted {target}",
     image=rf_image_path,
     bounds=[[bounds[0][0], bounds[0][1]], [bounds[1][0], bounds[1][1]]],
     opacity=0.7
@@ -440,10 +444,10 @@ html_file = "OxMapRF_LastHour.html"
 m.save(html_file)
 print(f"Map saved to: {html_file}")
 
-formula_image_path = 'formula_rf.jpg'
+formula_image_path = 'formula.jpg'
 save_rf_formula_as_jpg(formula_image_path)
 
-rf_labels_image_path = 'ox_rf_labels.png'
+labels_image_path = 'labels_image.png'
 generate_rf_image_with_labels_only(
     df,
     bounds,
@@ -452,21 +456,20 @@ generate_rf_image_with_labels_only(
     model,
     scaler,
     features,
-    output_file=rf_labels_image_path,
+    output_file=labels_image_path,
     num_cells=300
 )
 
-screenshot_path = "map_rf_screenshot.jpg"
+screenshot_path = "screenshot.jpg"
 capture_html_map_screenshot(html_file, screenshot_path)
 
 # === Report PDF ===
-save_rf_report_pdf(
-    output_path="RF_Report.pdf",
+save_map_report_pdf(
+    output_path="random_forest_report.pdf",
     results=[(rmse, mae, r2, f"All stations ({year}/{month}/{day} {hour}H)")],
     formula_image_path=formula_image_path,
     html_screenshot_path=screenshot_path,
-    rf_labels_image_path=rf_labels_image_path,
+    labels_image_path=labels_image_path,
     additional_image_path=ox_rf_loocv,
-    title="Random Forest Spatial Interpolation Report"
+    title=f"Random Forest Spatial Interpolation - {year}/{month}/{day} {hour:02d}H"
 )
-

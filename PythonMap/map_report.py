@@ -291,7 +291,7 @@ def save_kriging_report_pdf(
     map_x = col1_w + margin
     map_max_w = col2_w - 2 * margin
     map_max_h = 90 * mm
-    y_map = page_height - margin - map_max_h
+    y_map = page_height - (margin * 1.5) - map_max_h
     if html_screenshot_path and os.path.exists(html_screenshot_path):
         img = Image.open(html_screenshot_path)
         aspect = img.height / img.width
@@ -343,24 +343,24 @@ def save_kriging_report_pdf(
     print(f"✅ PDF report saved to: {output_path}")
 
 ###############################################################################
-def save_rf_report_pdf(
+def save_map_report_pdf(
     output_path,
     results,
-    formula_image_path='formula_rf.jpg',
-    html_screenshot_path='map_screenshot.jpg',
-    rf_labels_image_path='ox_rf_labels.png',
-    additional_image_path='ox_rf_loocv.jpg',
-    title="Random Forest Cross-validation Report"
+    formula_image_path,
+    html_screenshot_path,
+    labels_image_path,
+    additional_image_path,
+    title
 ):
     """
-    Saves a PDF report for Random Forest results using ReportLab.
+    Saves a PDF report for model results using ReportLab.
 
     Parameters:
         output_path: destination PDF path
         results: list of (rmse, mae, r2, description) tuples
         formula_image_path: image file of the formula and explanation
         html_screenshot_path: screenshot of the interactive map
-        rf_labels_image_path: static RF result image with station labels
+        labels_image_path: static result image with station labels
         title: report title
     """
     page_width, page_height = landscape(A4)
@@ -386,9 +386,9 @@ def save_rf_report_pdf(
         c.setFont("Helvetica", 10)
         c.drawString(margin, page_height - margin - 10 * mm, "(Formula image missing)")
 
-    # === RF image with station labels ===
-    if rf_labels_image_path and os.path.exists(rf_labels_image_path):
-        img = Image.open(rf_labels_image_path)
+    # === image with station labels ===
+    if labels_image_path and os.path.exists(labels_image_path):
+        img = Image.open(labels_image_path)
         img_w, img_h = img.size
         aspect = img_h / img_w
 
@@ -398,7 +398,7 @@ def save_rf_report_pdf(
         x_img = margin
         y_img = (page_height - image_target_height) / 2
 
-        c.drawImage(rf_labels_image_path, x_img, y_img,
+        c.drawImage(labels_image_path, x_img, y_img,
                     width=image_target_width, height=image_target_height,
                     preserveAspectRatio=True, mask='auto')
     else:
@@ -409,7 +409,7 @@ def save_rf_report_pdf(
     map_x = col1_w + margin
     map_max_w = col2_w - 2 * margin
     map_max_h = 90 * mm
-    y_map = page_height - margin - map_max_h
+    y_map = page_height - (margin * 1.5) - map_max_h
     if html_screenshot_path and os.path.exists(html_screenshot_path):
         img = Image.open(html_screenshot_path)
         aspect = img.height / img.width
@@ -510,3 +510,53 @@ def save_rf_formula_as_jpg(filename="formula_rf.jpg"):
 
     print(f"✅ Saved RF formula JPEG to {filename}")
 
+###############################################################################
+def save_lgbm_kriging_formula_as_jpg(filename="formula_lgbm_kriging.jpg"):
+    """
+    Save a visual explanation of the combined LightGBM + Kriging prediction as a JPEG image.
+
+    Parameters:
+        filename: output file path
+    """
+    formula = (
+        r"$\hat{y}(x) = f_{\mathrm{LGBM}}(x) + r_{\mathrm{Kriging}}(x)$"
+    )
+
+    explanation_lines = [
+        r"$\hat{y}(x)$: final predicted value at location $x$ (e.g., Ox concentration)",
+        r"$f_{\mathrm{LGBM}}(x)$: prediction from the LightGBM model at $x$",
+        r"$r_{\mathrm{Kriging}}(x)$: interpolated residual at $x$ using Ordinary Kriging",
+        "",
+        r"Step 1: Train LightGBM with LOOCV and compute residuals",
+        r"Step 2: Fit Ordinary Kriging on residuals from training stations",
+        r"Step 3: Predict on a spatial grid and combine the two terms",
+        "",
+        r"Kriging captures spatial patterns not learned by LightGBM."
+    ]
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    ax.axis('off')
+
+    # Title formula
+    ax.text(0, 1, formula, fontsize=20, ha='left', va='center')
+
+    # Explanation
+    y_start = 0.8
+    line_spacing = 0.07
+    for i, line in enumerate(explanation_lines):
+        ax.text(0, y_start - i * line_spacing, line,
+                fontsize=12, ha='left', va='center')
+
+    plt.tight_layout()
+
+    temp_file = "_temp_lgbm_kriging_formula.png"
+    fig.savefig(temp_file, dpi=300, bbox_inches='tight', pad_inches=0.2)
+    plt.close(fig)
+
+    # Convert to JPEG
+    img = Image.open(temp_file).convert("RGB")
+    img.save(filename, format="JPEG", quality=95)
+    img.close()
+    os.remove(temp_file)
+
+    print(f"✅ Saved LGBM + Kriging formula JPEG to {filename}")

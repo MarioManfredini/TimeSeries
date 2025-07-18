@@ -19,23 +19,38 @@ from pykrige.ok import OrdinaryKriging
 from datetime import datetime
 
 ###############################################################################
-def load_hour_ox_values(data_dir, stations_df, prefecture_code, year, month, day=None, hour=None):
+def load_hourly_measurements(
+    data_dir,
+    stations_df,
+    prefecture_code,
+    year,
+    month,
+    day=None,
+    hour=None,
+    measurement_columns=["Ox(ppm)"],
+    include_wind=True
+):
     """
-    For each station, load the Ox(ppm), NO(ppm), NO2(ppm), WS(m/s), and WD(16Dir)
-    values for a specific date and hour if provided, otherwise take the latest available.
+    Load specified pollutant measurements (e.g. Ox, SO2, SPM) for each station for a given date and hour.
+    Optionally include wind speed/direction if present.
 
     Parameters:
-        data_dir: directory containing the CSVs
-        stations_df: DataFrame with a 'station_code' column
-        year, month: int, year and month to load
-        prefecture_code: str
-        day, hour: optional int, specific date/hour to filter (e.g., day=29, hour=23)
+        data_dir (str): Directory where CSV files are stored.
+        stations_df (pd.DataFrame): DataFrame with 'station_code' column.
+        prefecture_code (str): Prefecture identifier used in file names.
+        year, month (int): Year and month of data to load.
+        day, hour (int, optional): Specific day and hour to filter. If None, use latest available data.
+        measurement_columns (list of str): List of measurement column names to load (e.g., ["Ox(ppm)", "SO2(ppm)"]).
+        include_wind (bool): Whether to load WS(m/s) and WD(16Dir) if present.
+
+    Returns:
+        dict: Dictionary keyed by station_code with a dict of requested measurements.
     """
-    ox_data = {}
+    results = {}
     ym_str = f"{year:04d}{month:02d}"
 
     for _, row in stations_df.iterrows():
-        station_code = row['station_code']
+        station_code = row["station_code"]
         filename = f"{ym_str}_{prefecture_code}_{station_code}.csv"
         file_path = os.path.join(data_dir, filename)
 
@@ -45,14 +60,8 @@ def load_hour_ox_values(data_dir, stations_df, prefecture_code, year, month, day
 
         try:
             df = pd.read_csv(file_path, encoding='cp932')
-            df["Ox(ppm)"] = pd.to_numeric(df["Ox(ppm)"], errors='coerce')
-            df["NO(ppm)"] = pd.to_numeric(df["NO(ppm)"], errors='coerce')
-            df["NO2(ppm)"] = pd.to_numeric(df["NO2(ppm)"], errors='coerce')
 
-            # Drop missing Ox
-            df = df[df["Ox(ppm)"].notna()]
-
-            # Datetime parsing
+            # Parse datetime column
             df["datetime"] = pd.to_datetime(
                 df["日付"] + " " + df["時"].astype(str).str.zfill(2),
                 format='%Y/%m/%d %H',
@@ -60,38 +69,87 @@ def load_hour_ox_values(data_dir, stations_df, prefecture_code, year, month, day
             )
             df = df.dropna(subset=["datetime"])
 
+            # Use specific datetime or latest available
             if day is not None and hour is not None:
-                # Filter for specified day/hour
-                dt_filter = datetime(year, month, day, hour)
-                row_match = df[df["datetime"] == dt_filter]
+                dt_target = datetime(year, month, day, hour)
+                row_match = df[df["datetime"] == dt_target]
                 if row_match.empty:
-                    print(f"[WARN] No data for {dt_filter} at station {station_code}")
+                    print(f"[WARN] No data for {dt_target} at station {station_code}")
                     continue
                 target_row = row_match.iloc[0]
             else:
-                # Use the latest available row
                 df = df.sort_values("datetime")
                 target_row = df.iloc[-1]
 
-            # Wind (optional)
-            if 'WS(m/s)' in df.columns and 'WD(16Dir)' in df.columns:
-                ws = pd.to_numeric(target_row['WS(m/s)'], errors='coerce')
-                wd = target_row['WD(16Dir)'] if pd.notna(target_row['WD(16Dir)']) else np.nan
-            else:
-                ws, wd = np.nan, np.nan
+            # Extract measurements
+            station_data = {}
+            for col in measurement_columns:
+                if col in df.columns:
+                    val = pd.to_numeric(target_row[col], errors='coerce')
+                    station_data[col] = float(val) if pd.notna(val) else np.nan
+                else:
+                    station_data[col] = np.nan
+                    print(f"[INFO] Column '{col}' not found in {filename}, setting NaN.")
 
-            ox_data[station_code] = {
-                'Ox(ppm)': float(target_row["Ox(ppm)"]),
-                'NO(ppm)': float(target_row["NO(ppm)"]),
-                'NO2(ppm)': float(target_row["NO2(ppm)"]),
-                'WS(m/s)': float(ws) if pd.notna(ws) else np.nan,
-                'WD(16Dir)': wd
-            }
+            # Wind speed/direction if required
+            if include_wind:
+                ws = pd.to_numeric(target_row.get("WS(m/s)", np.nan), errors='coerce')
+                wd = target_row.get("WD(16Dir)", np.nan)
+                station_data["WS(m/s)"] = float(ws) if pd.notna(ws) else np.nan
+                station_data["WD(16Dir)"] = wd if pd.notna(wd) else np.nan
+
+            results[station_code] = station_data
 
         except Exception as e:
-            print(f"[ERROR] Error reading {file_path}: {e}")
+            print(f"[ERROR] Failed to process {file_path}: {e}")
 
-    return ox_data
+    return results
+
+###############################################################################
+def load_preprocessed_hourly_data(
+    data_dir: str,
+    station_csv: str,
+    prefecture_code: str,
+    year: int,
+    month: int,
+    day: int,
+    hour: int,
+    target: str = 'Ox(ppm)'
+) -> pd.DataFrame:
+    """
+    Load and merge hourly pollutant and wind data with station coordinates and compute wind components.
+    """
+    import os
+    import pandas as pd
+
+    # Load coordinates
+    coord_path = os.path.join(data_dir, station_csv)
+    df = pd.read_csv(coord_path, skipinitialspace=True)
+
+    # Load measurements
+    ox_data = load_hourly_measurements(
+        data_dir,
+        df,
+        prefecture_code,
+        year,
+        month,
+        day,
+        hour,
+        measurement_columns=[target, 'WS(m/s)', 'WD(16Dir)']
+    )
+
+    # Filter valid stations
+    df = df[df['station_code'].isin(ox_data)].copy()
+
+    # Map pollutant and wind data
+    df[target] = df['station_code'].map(lambda c: ox_data[c][target])
+    df['WS(m/s)'] = df['station_code'].map(lambda c: ox_data[c]['WS(m/s)'])
+    df['WD(16Dir)'] = df['station_code'].map(lambda c: ox_data[c]['WD(16Dir)'])
+
+    # Compute wind components
+    df['U'], df['V'] = compute_wind_uv(df['WS(m/s)'], df['WD(16Dir)'])
+
+    return df
 
 ###############################################################################
 def load_station_temporal_features(
@@ -267,6 +325,138 @@ def compute_wind_uv(ws_series, wd_series):
     v.loc[valid_deg.index[valid_deg]] = ws_valid * np.cos(angle_rad)
 
     return u, v
+
+###############################################################################
+def generate_confidence_overlay_image(
+    df,
+    bounds,
+    target,
+    vmin,
+    vmax,
+    output_file,
+    k=7,
+    power=1.2,
+    num_cells=300,
+    max_distance_km=15,
+    cmap_name='viridis',
+    title=None,
+    add_wind=True,
+    bbox=True,
+    station_marker=True
+):
+    """
+    Generate an interpolated spatial image with confidence overlay.
+
+    Parameters:
+        df: DataFrame with at least 'longitude', 'latitude', and value_column
+        bounds: ((lat_min, lon_min), (lat_max, lon_max)) geographic bounds
+        value_column: str, name of the measurement column (e.g., 'Ox(ppm)')
+        vmin, vmax: float, min/max values for normalization
+        output_file: str, path of the output PNG file
+        k: int, number of neighbors for IDW
+        power: float, IDW power parameter
+        num_cells: int, number of horizontal grid cells
+        max_distance_km: float, for confidence shading
+        cmap_name: str, colormap
+        title: str or None, optional plot title
+        add_wind: bool, whether to draw wind vectors if columns exist
+        bbox: bool, whether to draw dashed rectangle bounding stations
+        station_marker: bool, whether to draw station markers
+    """
+    x = df['longitude'].values
+    y = df['latitude'].values
+    z = df[target].values
+    (lat_min, lon_min), (lat_max, lon_max) = bounds
+
+    # === Grid computation
+    lat_range = lat_max - lat_min
+    lon_range = lon_max - lon_min
+    lon_cells = num_cells
+    lat_cells = int(lon_cells * lat_range / lon_range)
+
+    grid_x, grid_y = np.meshgrid(
+        np.linspace(lon_min, lon_max, lon_cells),
+        np.linspace(lat_min, lat_max, lat_cells)
+    )
+    grid_coords = np.vstack((grid_x.ravel(), grid_y.ravel())).T
+
+    # === IDW interpolation
+    tree = cKDTree(np.vstack((x, y)).T)
+    distances, idx = tree.query(grid_coords, k=k)
+    weights = 1 / (distances + 1e-12) ** power
+    values = np.sum(weights * z[idx], axis=1) / np.sum(weights, axis=1)
+    grid_z = values.reshape((lat_cells, lon_cells))
+
+    # === Normalize colors
+    norm = np.clip((grid_z - vmin) / (vmax - vmin), 0, 1)
+    cmap = plt.get_cmap(cmap_name)
+    color_img = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
+
+    # === Confidence overlay
+    dists, _ = tree.query(grid_coords, k=1)
+    dist_km = dists * 111
+    confidence = np.clip(1 - dist_km / max_distance_km, 0, 1).reshape((lat_cells, lon_cells))
+
+    # === Alpha fade
+    low, high = 0.45, 0.55
+    gray_alpha = np.zeros_like(confidence)
+    gray_alpha[confidence <= low] = 180
+    gray_alpha[confidence >= high] = 0
+    fade = (high - confidence[(confidence > low) & (confidence < high)]) / (high - low)
+    gray_alpha[(confidence > low) & (confidence < high)] = (fade * 180).astype(np.uint8)
+
+    # === Blend gray overlay
+    gray_overlay = np.zeros((lat_cells, lon_cells, 4), dtype=np.uint8)
+    gray_overlay[..., :3] = 200
+    gray_overlay[..., 3] = gray_alpha.astype(np.uint8)
+
+    rgba = np.zeros((lat_cells, lon_cells, 4), dtype=np.uint8)
+    rgba[..., :3] = color_img
+    rgba[..., 3] = 255
+
+    fg_alpha = gray_overlay[..., 3:4] / 255.0
+    rgba[..., :3] = (
+        gray_overlay[..., :3] * fg_alpha + rgba[..., :3] * (1 - fg_alpha)
+    ).astype(np.uint8)
+
+    # === Plotting
+    fig, ax = plt.subplots(figsize=(8, 8 * lat_range / lon_range), dpi=200)
+    ax.imshow(rgba, extent=(lon_min, lon_max, lat_min, lat_max), origin='lower')
+    ax.axis('off')
+
+    if title:
+        ax.set_title(title, fontsize=10)
+
+    # === Bounding box
+    if bbox:
+        rect = Rectangle(
+            (x.min(), y.min()),
+            x.max() - x.min(),
+            y.max() - y.min(),
+            linewidth=1.5,
+            edgecolor='black',
+            linestyle='--',
+            facecolor='none'
+        )
+        ax.add_patch(rect)
+
+    # === Station markers
+    if station_marker:
+        ax.scatter(x, y, c='black', edgecolor='white', s=60, label='Stations')
+
+    # === Wind vectors
+    if add_wind and 'U' in df.columns and 'V' in df.columns:
+        ax.quiver(
+            df['longitude'], df['latitude'],
+            df['U'], df['V'],
+            angles='xy', scale_units='xy', scale=100.0,
+            color='blue', width=0.003, label='Wind'
+        )
+
+    plt.tight_layout()
+    plt.savefig(output_file, bbox_inches='tight', pad_inches=0)
+    plt.close()
+    print(f"✅ Saved overlay image to {output_file}")
 
 ###############################################################################
 def create_geojson_from_records(records, opacity=0.8):
@@ -453,7 +643,7 @@ def generate_idw_image(df, bounds, ox_min, ox_max, k=7, power=1, output_file='ox
     plt.close()
 
 ###############################################################################
-def generate_idw_images_by_hour(records, k=7, power=1, output_dir="idw_frames", num_cells=800, overwrite=False):
+def generate_idw_images_by_hour(target, records, k=7, power=1, output_dir="idw_frames", num_cells=800, overwrite=False):
     os.makedirs(output_dir, exist_ok=True)
     grouped = defaultdict(list)
 
@@ -462,7 +652,7 @@ def generate_idw_images_by_hour(records, k=7, power=1, output_dir="idw_frames", 
         grouped[dt].append(r)
 
     bounds = compute_bounds_from_records(records)
-    ox_min, ox_max = compute_global_ox_range(records)
+    vmin, vmax = compute_global_ox_range(records)
 
     for dt, group in grouped.items():
         df = pd.DataFrame(group)
@@ -473,20 +663,18 @@ def generate_idw_images_by_hour(records, k=7, power=1, output_dir="idw_frames", 
             print(f"⏭️ Skipped existing: {path}")
             continue
 
-        generate_ox_confidence_overlay_image(
+        generate_confidence_overlay_image(
             df,
             bounds,
-            ox_min,
-            ox_max,
-            k,
-            power,
-            output_file=path,
-            max_distance_km=15,
-            cmap_name="Reds"
+            target,
+            vmin,
+            vmax,
+            output_file=filename,
+            cmap_name='Reds',
         )
         print(f"✅ IDW image created: {path}")
 
-    return bounds, ox_min, ox_max
+    return bounds, vmin, vmax
 
 
 ###############################################################################
@@ -511,95 +699,6 @@ def draw_arrow_wind_vectors(map_obj, df, scale=0.02, color='red'):
                 offset=3,
                 attributes={'fill': color, 'font-weight': 'bold', 'font-size': '8'}
             ).add_to(map_obj)
-
-###############################################################################
-def generate_idw_loocv_error_image(df, bounds, k=7, power=1.2,
-                                   output_file="loocv_error_idw.png",
-                                   num_cells=800, metric='rmse'):
-    """
-    Interpolate LOOCV errors using IDW and generate a grayscale error image.
-
-    Parameters:
-        df: DataFrame with columns ['longitude', 'latitude', 'Ox(ppm)']
-        bounds: ((lat_min, lon_min), (lat_max, lon_max))
-        k: number of neighbors for IDW
-        power: power parameter for IDW
-        metric: 'rmse' or 'mae'
-    """
-
-    # === Step 1: Compute LOOCV errors ===
-    coords = np.vstack((df["longitude"], df["latitude"])).T
-    values = df["Ox(ppm)"].values
-    errors = []
-
-    for i in range(len(values)):
-        x_train = np.delete(coords, i, axis=0)
-        z_train = np.delete(values, i)
-        point = coords[i].reshape(1, -1)
-
-        tree = cKDTree(x_train)
-        distances, idx = tree.query(point, k=k)
-        weights = 1 / (distances + 1e-12) ** power
-        z_pred = np.sum(weights * z_train[idx]) / np.sum(weights)
-
-        err = values[i] - z_pred
-        if metric == 'mae':
-            errors.append(abs(err))
-        else:  # RMSE by default
-            errors.append(err ** 2)
-
-    df["LOOCV_error"] = errors
-
-    # === Step 2: Interpolate errors with IDW ===
-    x = df["longitude"].values
-    y = df["latitude"].values
-    z = df["LOOCV_error"].values
-
-    if metric == 'rmse':
-        z = np.sqrt(z)  # convert squared errors to RMSE
-
-    (lat_min, lon_min), (lat_max, lon_max) = bounds
-    grid_x, grid_y = np.meshgrid(
-        np.linspace(lon_min, lon_max, num_cells),
-        np.linspace(lat_min, lat_max, num_cells)
-    )
-    grid_coords = np.vstack((grid_x.ravel(), grid_y.ravel())).T
-
-    tree = cKDTree(np.vstack((x, y)).T)
-    distances, idx = tree.query(grid_coords, k=k)
-    weights = 1 / (distances + 1e-12) ** power
-    values_interp = np.sum(weights * z[idx], axis=1) / np.sum(weights, axis=1)
-    grid_z = values_interp.reshape((num_cells, num_cells))
-
-    # === Step 3: Plot image ===
-    aspect_ratio = (lat_max - lat_min) / (lon_max - lon_min)
-    fig_width = 8
-    fig_height = fig_width * aspect_ratio
-
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height), dpi=200)
-    ax.axis('off')
-    cmap = 'Greys_r'  # white = high error, black = low error
-
-    im = ax.imshow(
-        grid_z,
-        extent=(lon_min, lon_max, lat_min, lat_max),
-        origin='lower',
-        cmap=cmap,
-        interpolation='nearest'
-    )
-
-    # Station markers
-    ax.scatter(x, y, c='red', edgecolor='black', s=60, label='Stations')
-
-    # Colorbar
-    cb = fig.colorbar(im, ax=ax, shrink=0.75, pad=0.02)
-    cb.set_label(f"Interpolated LOOCV {metric.upper()}")
-
-    plt.tight_layout()
-    plt.savefig(output_file, bbox_inches='tight', pad_inches=0.1)
-    plt.close()
-    print(f"✅ Saved error image to: {output_file}")
-
 
 ###############################################################################
 def generate_distance_mask(df, bounds, num_cells=(800, 800), max_distance_km=10.0):
@@ -644,109 +743,6 @@ def generate_distance_mask(df, bounds, num_cells=(800, 800), max_distance_km=10.
 
     # Flip vertically to match image coordinate system
     return np.flipud(confidence_image)
-
-###############################################################################
-def generate_ox_confidence_overlay_image(
-    df,
-    bounds,
-    ox_min,
-    ox_max,
-    k=7,
-    power=1.2,
-    output_file='ox_idw_confidence.png',
-    num_cells=300,
-    max_distance_km=20,
-    cmap_name='Reds'
-):
-    x = df['longitude'].values
-    y = df['latitude'].values
-    z = df['Ox(ppm)'].values
-    (lat_min, lon_min), (lat_max, lon_max) = bounds
-
-    # === Create grid with square cells ===
-    lon_cells = num_cells
-    lat_range = lat_max - lat_min
-    lon_range = lon_max - lon_min
-    lat_cells = int(lon_cells * lat_range / lon_range)
-
-    grid_x, grid_y = np.meshgrid(
-        np.linspace(lon_min, lon_max, lon_cells),
-        np.linspace(lat_min, lat_max, lat_cells)
-    )
-    grid_coords = np.vstack((grid_x.ravel(), grid_y.ravel())).T
-
-    # === IDW interpolation ===
-    tree = cKDTree(np.vstack((x, y)).T)
-    distances, idx = tree.query(grid_coords, k=k)
-    weights = 1 / (distances + 1e-12) ** power
-    values = np.sum(weights * z[idx], axis=1) / np.sum(weights, axis=1)
-    grid_z = values.reshape((lat_cells, lon_cells))  # no flip
-
-    # === Normalize colormap
-    norm = np.clip((grid_z - ox_min) / (ox_max - ox_min), 0, 1)
-    cmap = plt.get_cmap(cmap_name)
-    color_img = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
-
-    # === Confidence
-    dists, _ = tree.query(grid_coords, k=1)
-    dist_km = dists * 111
-    confidence = np.clip(1 - dist_km / max_distance_km, 0, 1).reshape((lat_cells, lon_cells))
-
-    # === Grayscale alpha mask with soft border
-    low, high = 0.45, 0.55
-    gray_alpha = np.zeros_like(confidence)
-    gray_alpha[confidence <= low] = 180
-    gray_alpha[confidence >= high] = 0
-    fade = (high - confidence[(confidence > low) & (confidence < high)]) / (high - low)
-    gray_alpha[(confidence > low) & (confidence < high)] = (fade * 180).astype(np.uint8)
-
-    # === Blend gray overlay
-    gray_overlay = np.zeros((lat_cells, lon_cells, 4), dtype=np.uint8)
-    gray_overlay[..., :3] = 200
-    gray_overlay[..., 3] = gray_alpha.astype(np.uint8)
-
-    rgba = np.zeros((lat_cells, lon_cells, 4), dtype=np.uint8)
-    rgba[..., :3] = color_img
-    rgba[..., 3] = 255
-
-    fg_alpha = gray_overlay[..., 3:4] / 255.0
-    rgba[..., :3] = (
-        gray_overlay[..., :3] * fg_alpha + rgba[..., :3] * (1 - fg_alpha)
-    ).astype(np.uint8)
-
-    # === Plot
-    fig, ax = plt.subplots(figsize=(8, 8 * lat_range / lon_range), dpi=200)
-    ax.imshow(rgba, extent=(lon_min, lon_max, lat_min, lat_max), origin='lower')  # no flip
-    ax.axis('off')
-
-    # === Bounding box
-    rect = Rectangle(
-        (x.min(), y.min()),
-        x.max() - x.min(),
-        y.max() - y.min(),
-        linewidth=1.5,
-        edgecolor='black',
-        linestyle='--',
-        facecolor='none'
-    )
-    ax.add_patch(rect)
-
-    # === Stations
-    ax.scatter(x, y, c='black', edgecolor='white', s=60, label='Stations')
-
-    # === Wind vectors
-    if 'U' in df.columns and 'V' in df.columns:
-        ax.quiver(
-            df['longitude'], df['latitude'],
-            df['U'], df['V'],
-            angles='xy', scale_units='xy', scale=100.0,
-            color='blue', width=0.003, label='Wind'
-        )
-
-    plt.tight_layout()
-    plt.savefig(output_file, bbox_inches='tight', pad_inches=0)
-    plt.close()
-    print(f"✅ Saved image with overlays to {output_file}")
 
 ###############################################################################
 def get_variogram_parameters(model_name):

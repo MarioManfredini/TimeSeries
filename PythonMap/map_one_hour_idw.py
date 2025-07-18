@@ -4,27 +4,25 @@ Created: 2025/06/22
 
 Author: Mario
 """
-import os
-import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import itertools
 import folium
+
 from folium.raster_layers import ImageOverlay
-from map_utils import (
-                       load_hour_ox_values,
-                       compute_wind_uv,
-                       compute_bounds_from_df,
-                       generate_idw_loocv_error_image,
-                       generate_ox_confidence_overlay_image
-                       )
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from scipy.spatial import cKDTree
-from map_report import save_idw_report_pdf, capture_html_map_screenshot, save_idw_formula_as_jpg
-import itertools
-import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
+from map_utils import (
+    load_preprocessed_hourly_data,
+    compute_bounds_from_df,
+    generate_confidence_overlay_image
+)
+from map_report import save_idw_report_pdf, capture_html_map_screenshot, save_idw_formula_as_jpg
+
 ###############################################################################
-def generate_idw_image_with_labels_only(df, bounds, ox_min, ox_max, k=7, power=1, output_file='ox_idw_labels.png', num_cells=800):
+def generate_idw_image_with_labels_only(df, bounds, vmin, vmax, k=7, power=1, output_file='ox_idw_labels.png', num_cells=800):
     """
     Generate an IDW interpolated grayscale image with station locations and Ox labels (no map, no wind).
 
@@ -33,10 +31,10 @@ def generate_idw_image_with_labels_only(df, bounds, ox_min, ox_max, k=7, power=1
         bounds: tuple ((lat_min, lon_min), (lat_max, lon_max))
         output_file: path to save resulting PNG
         num_cells: resolution of interpolation grid
-        ox_min, ox_max: fixed min/max values for grayscale scale
+        vmin, vmax: fixed min/max values for grayscale scale
     """
-    if ox_min is None or ox_max is None:
-        raise ValueError("ox_min and ox_max must be provided to ensure consistent grayscale.")
+    if vmin is None or vmax is None:
+        raise ValueError("vmin and vmax must be provided to ensure consistent grayscale.")
 
     x = df['longitude'].values
     y = df['latitude'].values
@@ -70,8 +68,8 @@ def generate_idw_image_with_labels_only(df, bounds, ox_min, ox_max, k=7, power=1
         grid_z,
         extent=(lon_min, lon_max, lat_min, lat_max),
         origin='lower',
-        vmin=ox_min,
-        vmax=ox_max,
+        vmin=vmin,
+        vmax=vmax,
         cmap='Greys',
         alpha=0.9,
         aspect='auto'
@@ -174,26 +172,22 @@ def plot_idw_loocv_and_save(df, k=7, power=1.0, output_file="idw_loocv_results.j
 data_dir = '..\\data\\Osaka\\'
 prefecture_code = '27'
 station_coordinates = 'Stations_Ox.csv'
-csv_path = os.path.join(data_dir, station_coordinates)
+target = 'Ox(ppm)'
+year = 2025
+month = 5
+day = 12
+hour = 19
 
-# Load coordinates and Ox values
-df = pd.read_csv(csv_path, skipinitialspace=True)
-
-# === Load and prepare data ===
-ox_data = load_hour_ox_values(
+df = load_preprocessed_hourly_data(
     data_dir,
-    df,
-    prefecture_code=prefecture_code,
-    year=2025,
-    month=5,
-    day=12,
-    hour=12
+    station_coordinates,
+    prefecture_code,
+    year,
+    month,
+    day,
+    hour,
+    target
 )
-df = df[df['station_code'].isin(ox_data.keys())].copy()
-df['Ox(ppm)'] = df['station_code'].map(lambda c: ox_data[c]['Ox(ppm)'])
-df['WS(m/s)'] = df['station_code'].map(lambda c: ox_data[c]['WS(m/s)'])
-df['WD(16Dir)'] = df['station_code'].map(lambda c: ox_data[c]['WD(16Dir)'])
-df['U'], df['V'] = compute_wind_uv(df['WS(m/s)'], df['WD(16Dir)'])
 
 # === test parameters ===
 k_values = [5, 6, 7, 9]
@@ -204,9 +198,9 @@ print(" k  power |   RMSE   |   MAE   |   R²")
 print("-" * 40)
 
 results = []
-ox_idw_loocv="ox_idw_loocv.png"
+loocv_image="loocv.png"
 for k, power in itertools.product(k_values, power_values):
-    rmse, mae, r2 = plot_idw_loocv_and_save(df, k, power, ox_idw_loocv)
+    rmse, mae, r2 = plot_idw_loocv_and_save(df, k, power, loocv_image)
     print(f"{k:2d}  {power:5.2f} | {rmse:8.5f} | {mae:7.5f} | {r2:6.3f}")
     results.append((k, power, rmse, mae, r2))
 
@@ -219,25 +213,23 @@ k = results_sorted[0][0]
 power = results_sorted[0][1]
 print(f"Best: k={k}, power={power}")
 
-rmse, mae, r2 = plot_idw_loocv_and_save(df, k, power, ox_idw_loocv)
+rmse, mae, r2 = plot_idw_loocv_and_save(df, k, power, loocv_image)
 
 # === Compute bounds and generate image ===
 bounds = compute_bounds_from_df(df, margin_ratio=0.10)
 # Color scale limits (percentiles)
-ox_min = np.percentile(df['Ox(ppm)'], 5)
-ox_max = np.percentile(df['Ox(ppm)'], 95)
-ox_idw_image = 'ox_idw.png'
+vmin = np.percentile(df[target], 5)
+vmax = np.percentile(df[target], 95)
+output_file = 'prediction.png'
 
-generate_ox_confidence_overlay_image(
+generate_confidence_overlay_image(
     df,
     bounds,
-    ox_min,
-    ox_max,
-    k,
-    power,
-    output_file=ox_idw_image,
-    max_distance_km=15,
-    cmap_name="Reds"
+    target,
+    vmin,
+    vmax,
+    output_file,
+    cmap_name='Reds',
 )
 
 # === Folium Map ===
@@ -249,8 +241,8 @@ m = folium.Map(location=[center_lat, center_lon], zoom_start=10)
 
 # === Overlay interpolated image ===
 image_overlay = ImageOverlay(
-    name="Interpolated Ox(ppm)",
-    image=ox_idw_image,
+    name=f"Interpolated {target}",
+    image=output_file,
     bounds=[[bounds[0][0], bounds[0][1]], [bounds[1][0], bounds[1][1]]],
     opacity=0.7,
     interactive=False,
@@ -260,35 +252,26 @@ image_overlay = ImageOverlay(
 image_overlay.add_to(m)
 
 # Save interactive map
-m.save("OxMapIDW_LastHour.html")
-print("Map saved to: OxMapIDW_LastHour.html")
+html_path = "map_one_hour_idw.html"
+m.save(html_path)
+print(f"Map saved to: {html_path}")
 
-formula_image_path = 'formula_idw.jpg'
+formula_image_path = 'formula.jpg'
 save_idw_formula_as_jpg(filename=formula_image_path)
 
-idw_labels_image_path = 'ox_idw_with_labels_only.png'
+idw_labels_image_path = 'labels_image.png'
 generate_idw_image_with_labels_only(
-    df, bounds, ox_min, ox_max, k, power, output_file=idw_labels_image_path)
+    df, bounds, vmin, vmax, k, power, output_file=idw_labels_image_path)
 
-html_path = "OxMapIDW_LastHour.html"
-screenshot_path = "map_screenshot.jpg"
+screenshot_path = "screenshot.jpg"
 capture_html_map_screenshot(html_path, screenshot_path)
 
-generate_idw_loocv_error_image(
-    df,
-    bounds,
-    k,
-    power,
-    output_file="error_map_rmse.png",
-    metric='rmse'
-)
-
 save_idw_report_pdf(
-    output_path="IDW_Report.pdf",
+    output_path="idw_report.pdf",
     results=results,
     formula_image_path=formula_image_path,
     html_screenshot_path=screenshot_path,
     idw_labels_image_path=idw_labels_image_path,
-    additional_image_path=ox_idw_loocv,
-    title="IDW Cross-validation Report"
+    additional_image_path=loocv_image,
+    title=f"IDW - {year}/{month}/{day} {hour:02d}H"
 )

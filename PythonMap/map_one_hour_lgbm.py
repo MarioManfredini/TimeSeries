@@ -11,10 +11,9 @@ import folium
 from folium.raster_layers import ImageOverlay
 from map_utils import (
     load_station_temporal_features,
-    compute_wind_uv,
     compute_bounds_from_df
 )
-from map_report import capture_html_map_screenshot, save_rf_report_pdf, save_rf_formula_as_jpg
+from map_report import capture_html_map_screenshot, save_map_report_pdf, save_rf_formula_as_jpg
 from lightgbm import LGBMRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import matplotlib.pyplot as plt
@@ -352,8 +351,6 @@ def generate_ox_rf_confidence_overlay_image(
     plt.close()
     print(f"✅ LGBM prediction image saved to: {output_file}")
 
-
-
 ###############################################################################
 
 # === CONFIG ===
@@ -361,14 +358,15 @@ data_dir = '..\\data\\Osaka\\'
 prefecture_code = '27'
 station_coordinates = 'Stations_Ox.csv'
 csv_path = os.path.join(data_dir, station_coordinates)
+target = 'Ox(ppm)'
+year=2025
+month=5
+day=12
+hour=19
 
 # === Load and prepare data ===
 df = pd.read_csv(csv_path, skipinitialspace=True)
 
-year=2025
-month=5
-day=12
-hour=12
 df = load_station_temporal_features(
     data_dir,
     df,
@@ -378,7 +376,7 @@ df = load_station_temporal_features(
     day,
     hour,
     lags=24,
-    target_item="Ox(ppm)"
+    target_item=target
 )
 
 print("[DEBUG] Final dataframe shape:", df.shape)
@@ -387,7 +385,6 @@ print("[DEBUG] Final dataframe shape:", df.shape)
 exclude_cols = ['datetime', 'WD(16Dir)', 'station_code', 'station_name'] 
 features = [col for col in df.columns if col not in exclude_cols and np.issubdtype(df[col].dtype, np.number)]
 
-target = 'Ox(ppm)'
 X = df[features]
 y = df[target].values
 
@@ -425,14 +422,14 @@ print("\n✅ LightGBM LOOCV:")
 print(f"RMSE: {rmse:.5f}, MAE: {mae:.5f}, R²: {r2:.3f}")
 
 # === LOOCV ===
-ox_lgbm_loocv="ox_lgbm_loocv.png"
+ox_lgbm_loocv="loocv.png"
 plot_rf_loocv_results(rmse, mae, r2, trues, preds, ox_lgbm_loocv)
 
 # === Generate image ===
 bounds = compute_bounds_from_df(df, margin_ratio=0.10)
-ox_min = np.percentile(df['Ox(ppm)'], 5)
-ox_max = np.percentile(df['Ox(ppm)'], 95)
-lgbm_image_path = "ox_lgbm_prediction.png"
+ox_min = np.percentile(df[target], 5)
+ox_max = np.percentile(df[target], 95)
+lgbm_image_path = "prediction.png"
 generate_ox_rf_confidence_overlay_image(
     df,
     bounds,
@@ -452,7 +449,7 @@ center_lat = df['latitude'].mean()
 center_lon = df['longitude'].mean()
 m = folium.Map(location=[center_lat, center_lon], zoom_start=10)
 image_overlay = ImageOverlay(
-    name="LGBM Predicted Ox(ppm)",
+    name=f"LGBM Predicted {target}",
     image=lgbm_image_path,
     bounds=[[bounds[0][0], bounds[0][1]], [bounds[1][0], bounds[1][1]]],
     opacity=0.7
@@ -463,10 +460,10 @@ html_file = "OxMapLGBM_LastHour.html"
 m.save(html_file)
 print(f"Map saved to: {html_file}")
 
-formula_image_path = 'formula_lgbm.jpg'
+formula_image_path = 'formula.jpg'
 save_rf_formula_as_jpg(formula_image_path)
 
-lgbm_labels_image_path = 'ox_lgbm_labels.png'
+labels_image_path = 'labels_image.png'
 generate_rf_image_with_labels_only(
     df,
     bounds,
@@ -475,20 +472,20 @@ generate_rf_image_with_labels_only(
     model,
     scaler,
     features,
-    output_file=lgbm_labels_image_path,
+    output_file=labels_image_path,
     num_cells=300
 )
 
-screenshot_path = "map_lgbm_screenshot.jpg"
+screenshot_path = "screenshot.jpg"
 capture_html_map_screenshot(html_file, screenshot_path)
 
 # === Report PDF ===
-save_rf_report_pdf(
+save_map_report_pdf(
     output_path="LightGBM_Report.pdf",
     results=[(rmse, mae, r2, f"All stations ({year}/{month}/{day} {hour}H)")],
     formula_image_path=formula_image_path,
     html_screenshot_path=screenshot_path,
-    rf_labels_image_path=lgbm_labels_image_path,
+    labels_image_path=labels_image_path,
     additional_image_path=ox_lgbm_loocv,
     title=f"LightGBM Interpolation - {year}/{month}/{day} {hour:02d}H"
 )
