@@ -22,6 +22,8 @@ import utility
 data_dir = '..\\data\\Osaka\\'
 prefecture_code = '27'
 station_coordinates = 'Stations_Ox.csv'
+target = 'Ox(ppm)'
+
 csv_path = os.path.join(data_dir, station_coordinates)
 
 stations_df = pd.read_csv(csv_path, skipinitialspace=True)
@@ -42,7 +44,7 @@ center_lat = sum(r['latitude'] for r in records) / len(records)
 center_lon = sum(r['longitude'] for r in records) / len(records)
 m = folium.Map(location=[center_lat, center_lon], zoom_start=10)
 
-geojson_data = create_geojson_from_records(records)
+geojson_data = create_geojson_from_records(target, records)
 
 TimestampedGeoJson(
     data=geojson_data,
@@ -54,5 +56,6 @@ TimestampedGeoJson(
 ).add_to(m)
 
 # Save interactive map
-m.save("OxMapAnimation_LastTwoDays.html")
-print("Map saved to: OxMapAnimation_LastTwoDays.html")
+html_file_name = "map_two_days_anime.html"
+m.save(html_file_name)
+print(f"Map saved to: {html_file_name}")

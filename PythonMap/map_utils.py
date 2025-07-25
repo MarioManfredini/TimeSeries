@@ -10,11 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial import cKDTree
 from collections import defaultdict
-from folium import PolyLine
-from folium.plugins import PolyLineTextPath
 from matplotlib.patches import Rectangle
-from matplotlib.colors import Normalize
-from geopy.distance import geodesic
 from pykrige.ok import OrdinaryKriging
 from datetime import datetime
 
@@ -127,7 +123,7 @@ def load_preprocessed_hourly_data(
     df = pd.read_csv(coord_path, skipinitialspace=True)
 
     # Load measurements
-    ox_data = load_hourly_measurements(
+    target_and_wind_data = load_hourly_measurements(
         data_dir,
         df,
         prefecture_code,
@@ -139,12 +135,12 @@ def load_preprocessed_hourly_data(
     )
 
     # Filter valid stations
-    df = df[df['station_code'].isin(ox_data)].copy()
+    df = df[df['station_code'].isin(target_and_wind_data)].copy()
 
     # Map pollutant and wind data
-    df[target] = df['station_code'].map(lambda c: ox_data[c][target])
-    df['WS(m/s)'] = df['station_code'].map(lambda c: ox_data[c]['WS(m/s)'])
-    df['WD(16Dir)'] = df['station_code'].map(lambda c: ox_data[c]['WD(16Dir)'])
+    df[target] = df['station_code'].map(lambda c: target_and_wind_data[c][target])
+    df['WS(m/s)'] = df['station_code'].map(lambda c: target_and_wind_data[c]['WS(m/s)'])
+    df['WD(16Dir)'] = df['station_code'].map(lambda c: target_and_wind_data[c]['WD(16Dir)'])
 
     # Compute wind components
     df['U'], df['V'] = compute_wind_uv(df['WS(m/s)'], df['WD(16Dir)'])
@@ -327,139 +323,7 @@ def compute_wind_uv(ws_series, wd_series):
     return u, v
 
 ###############################################################################
-def generate_confidence_overlay_image(
-    df,
-    bounds,
-    target,
-    vmin,
-    vmax,
-    output_file,
-    k=7,
-    power=1.2,
-    num_cells=300,
-    max_distance_km=15,
-    cmap_name='viridis',
-    title=None,
-    add_wind=True,
-    bbox=True,
-    station_marker=True
-):
-    """
-    Generate an interpolated spatial image with confidence overlay.
-
-    Parameters:
-        df: DataFrame with at least 'longitude', 'latitude', and value_column
-        bounds: ((lat_min, lon_min), (lat_max, lon_max)) geographic bounds
-        value_column: str, name of the measurement column (e.g., 'Ox(ppm)')
-        vmin, vmax: float, min/max values for normalization
-        output_file: str, path of the output PNG file
-        k: int, number of neighbors for IDW
-        power: float, IDW power parameter
-        num_cells: int, number of horizontal grid cells
-        max_distance_km: float, for confidence shading
-        cmap_name: str, colormap
-        title: str or None, optional plot title
-        add_wind: bool, whether to draw wind vectors if columns exist
-        bbox: bool, whether to draw dashed rectangle bounding stations
-        station_marker: bool, whether to draw station markers
-    """
-    x = df['longitude'].values
-    y = df['latitude'].values
-    z = df[target].values
-    (lat_min, lon_min), (lat_max, lon_max) = bounds
-
-    # === Grid computation
-    lat_range = lat_max - lat_min
-    lon_range = lon_max - lon_min
-    lon_cells = num_cells
-    lat_cells = int(lon_cells * lat_range / lon_range)
-
-    grid_x, grid_y = np.meshgrid(
-        np.linspace(lon_min, lon_max, lon_cells),
-        np.linspace(lat_min, lat_max, lat_cells)
-    )
-    grid_coords = np.vstack((grid_x.ravel(), grid_y.ravel())).T
-
-    # === IDW interpolation
-    tree = cKDTree(np.vstack((x, y)).T)
-    distances, idx = tree.query(grid_coords, k=k)
-    weights = 1 / (distances + 1e-12) ** power
-    values = np.sum(weights * z[idx], axis=1) / np.sum(weights, axis=1)
-    grid_z = values.reshape((lat_cells, lon_cells))
-
-    # === Normalize colors
-    norm = np.clip((grid_z - vmin) / (vmax - vmin), 0, 1)
-    cmap = plt.get_cmap(cmap_name)
-    color_img = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
-
-    # === Confidence overlay
-    dists, _ = tree.query(grid_coords, k=1)
-    dist_km = dists * 111
-    confidence = np.clip(1 - dist_km / max_distance_km, 0, 1).reshape((lat_cells, lon_cells))
-
-    # === Alpha fade
-    low, high = 0.45, 0.55
-    gray_alpha = np.zeros_like(confidence)
-    gray_alpha[confidence <= low] = 180
-    gray_alpha[confidence >= high] = 0
-    fade = (high - confidence[(confidence > low) & (confidence < high)]) / (high - low)
-    gray_alpha[(confidence > low) & (confidence < high)] = (fade * 180).astype(np.uint8)
-
-    # === Blend gray overlay
-    gray_overlay = np.zeros((lat_cells, lon_cells, 4), dtype=np.uint8)
-    gray_overlay[..., :3] = 200
-    gray_overlay[..., 3] = gray_alpha.astype(np.uint8)
-
-    rgba = np.zeros((lat_cells, lon_cells, 4), dtype=np.uint8)
-    rgba[..., :3] = color_img
-    rgba[..., 3] = 255
-
-    fg_alpha = gray_overlay[..., 3:4] / 255.0
-    rgba[..., :3] = (
-        gray_overlay[..., :3] * fg_alpha + rgba[..., :3] * (1 - fg_alpha)
-    ).astype(np.uint8)
-
-    # === Plotting
-    fig, ax = plt.subplots(figsize=(8, 8 * lat_range / lon_range), dpi=200)
-    ax.imshow(rgba, extent=(lon_min, lon_max, lat_min, lat_max), origin='lower')
-    ax.axis('off')
-
-    if title:
-        ax.set_title(title, fontsize=10)
-
-    # === Bounding box
-    if bbox:
-        rect = Rectangle(
-            (x.min(), y.min()),
-            x.max() - x.min(),
-            y.max() - y.min(),
-            linewidth=1.5,
-            edgecolor='black',
-            linestyle='--',
-            facecolor='none'
-        )
-        ax.add_patch(rect)
-
-    # === Station markers
-    if station_marker:
-        ax.scatter(x, y, c='black', edgecolor='white', s=60, label='Stations')
-
-    # === Wind vectors
-    if add_wind and 'U' in df.columns and 'V' in df.columns:
-        ax.quiver(
-            df['longitude'], df['latitude'],
-            df['U'], df['V'],
-            angles='xy', scale_units='xy', scale=100.0,
-            color='blue', width=0.003, label='Wind'
-        )
-
-    plt.tight_layout()
-    plt.savefig(output_file, bbox_inches='tight', pad_inches=0)
-    plt.close()
-    print(f"✅ Saved overlay image to {output_file}")
-
-###############################################################################
-def create_geojson_from_records(records, opacity=0.8):
+def create_geojson_from_records(target, records, opacity=0.8):
     features = []
 
     for record in records:
@@ -467,11 +331,10 @@ def create_geojson_from_records(records, opacity=0.8):
         station_name = record["station_name"]
         lat = record["latitude"]
         lon = record["longitude"]
-        ox = record["Ox(ppm)"]
+        value = record[target]
         ts = record["datetime"].strftime("%Y-%m-%dT%H:%M:%S")
 
-        # Scala del grigio basata su Ox
-        gray_scale = int(255 * (1 - min(max(ox, 0), 0.1) / 0.1))
+        gray_scale = int(255 * (1 - min(max(value, 0), 0.1) / 0.1))
         color = f"rgb({gray_scale},{gray_scale},{gray_scale})"
 
         feature = {
@@ -482,7 +345,7 @@ def create_geojson_from_records(records, opacity=0.8):
             },
             "properties": {
                 "time": ts,
-                "popup": f"{station_name} ({station_code})<br>Ox(ppm): {ox:.3f} ppm",
+                "popup": f"{station_name} ({station_code})<br>{target}: {value:.3f} ppm",
                 "icon": "circle",
                 "iconstyle": {
                     "fillColor": color,
@@ -553,97 +416,23 @@ def compute_bounds_from_records(records, margin_ratio=0.10):
     return (lat_min, lon_min), (lat_max, lon_max)
 
 ###############################################################################
-def compute_global_ox_range(records, lower_percentile=5, upper_percentile=95):
-    all_ox_values = [r['Ox(ppm)'] for r in records if 'Ox(ppm)' in r]
-    ox_min = np.percentile(all_ox_values, lower_percentile)
-    ox_max = np.percentile(all_ox_values, upper_percentile)
-    return ox_min, ox_max
+def compute_global_measurements_range(target, records, lower_percentile=5, upper_percentile=95):
+    all_values = [r[target] for r in records if target in r]
+    vmin = np.percentile(all_values, lower_percentile)
+    vmax = np.percentile(all_values, upper_percentile)
+    return vmin, vmax
 
 ###############################################################################
-def generate_idw_image(df, bounds, ox_min, ox_max, k=7, power=1, output_file='ox_idw.png', num_cells=800):
-    """
-    Generate an IDW interpolated grayscale image over specified bounds.
-
-    Parameters:
-        df: DataFrame with columns ['longitude', 'latitude', 'Ox(ppm)', 'U', 'V']
-        bounds: tuple ((lat_min, lon_min), (lat_max, lon_max))
-        output_file: path to save the resulting PNG
-        num_cells: resolution of the interpolation grid
-        ox_min, ox_max: fixed min and max values for grayscale (required)
-    """
-    if ox_min is None or ox_max is None:
-        raise ValueError("ox_min and ox_max must be provided to ensure consistent grayscale scale.")
-
-    x = df['longitude'].values
-    y = df['latitude'].values
-    z = df['Ox(ppm)'].values
-
-    (lat_min, lon_min), (lat_max, lon_max) = bounds
-
-    # Create interpolation grid
-    grid_x, grid_y = np.meshgrid(
-        np.linspace(lon_min, lon_max, num_cells),
-        np.linspace(lat_min, lat_max, num_cells)
-    )
-    grid_coords = np.vstack((grid_x.ravel(), grid_y.ravel())).T
-
-    # Interpolate using IDW
-    tree = cKDTree(np.vstack((x, y)).T)
-    distances, idx = tree.query(grid_coords, k=k)
-    weights = 1 / (distances + 1e-12) ** power
-    values = np.sum(weights * z[idx], axis=1) / np.sum(weights, axis=1)
-    grid_z = values.reshape((num_cells, num_cells))
-
-    # Plot
-    aspect_ratio = (lat_max - lat_min) / (lon_max - lon_min)
-    width = 8
-    height = width * aspect_ratio
-
-    fig, ax = plt.subplots(figsize=(width, height), dpi=200)
-    ax.axis('off')
-    ax.imshow(
-        grid_z,
-        extent=(lon_min, lon_max, lat_min, lat_max),
-        origin='lower',
-        vmin=ox_min,
-        vmax=ox_max,
-        cmap='Greys',
-        alpha=0.7,
-        aspect='auto'
-    )
-
-    # Bounding box for original station area
-    orig_lon_min, orig_lon_max = x.min(), x.max()
-    orig_lat_min, orig_lat_max = y.min(), y.max()
-
-    rect = Rectangle(
-        (orig_lon_min, orig_lat_min),
-        orig_lon_max - orig_lon_min,
-        orig_lat_max - orig_lat_min,
-        linewidth=1.5,
-        edgecolor='black',
-        linestyle='--',
-        facecolor='none'
-    )
-    ax.add_patch(rect)
-
-    # Overlay station markers
-    ax.scatter(x, y, c='black', edgecolor='white', s=60, label='Stations')
-
-    # Wind vectors
-    ax.quiver(
-        df['longitude'], df['latitude'],
-        df['U'], df['V'],
-        angles='xy', scale_units='xy', scale=100.0,
-        color='skyblue', width=0.003, label='Wind vectors'
-    )
-
-    plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
-    plt.savefig(output_file, transparent=True, bbox_inches='tight', pad_inches=0)
-    plt.close()
-
-###############################################################################
-def generate_idw_images_by_hour(target, records, k=7, power=1, output_dir="idw_frames", num_cells=800, overwrite=False):
+def generate_idw_images_by_hour(
+        target,
+        records,
+        k=7,
+        power=1,
+        output_dir="idw_frames",
+        image_prefix="idw_",
+        num_cells=300,
+        overwrite=False
+):
     os.makedirs(output_dir, exist_ok=True)
     grouped = defaultdict(list)
 
@@ -652,97 +441,44 @@ def generate_idw_images_by_hour(target, records, k=7, power=1, output_dir="idw_f
         grouped[dt].append(r)
 
     bounds = compute_bounds_from_records(records)
-    vmin, vmax = compute_global_ox_range(records)
+    vmin, vmax = compute_global_measurements_range(target, records)
 
     for dt, group in grouped.items():
         df = pd.DataFrame(group)
-        filename = dt.strftime("ox_idw_%Y%m%d_%H.png")
-        path = os.path.join(output_dir, filename)
+        filename = dt.strftime(f"{image_prefix}%Y%m%d_%H.png")
+        output_file = os.path.join(output_dir, filename)
 
-        if not overwrite and os.path.exists(path):
-            print(f"⏭️ Skipped existing: {path}")
+        if not overwrite and os.path.exists(output_file):
+            print(f"⏭️ Skipped existing: {output_file}")
             continue
 
+        # === Generate IDW interpolated grid ===
+        grid = generate_idw_grid(
+            target,
+            df,
+            bounds,
+            num_cells,
+            k,
+            power
+        )
+
+        # === Generate confidence overlay image ===
+        # Color scale limits (percentiles)
+        vmin = np.percentile(df[target], 5)
+        vmax = np.percentile(df[target], 95)
         generate_confidence_overlay_image(
             df,
             bounds,
-            target,
+            grid,
             vmin,
             vmax,
-            output_file=filename,
-            cmap_name='Reds',
+            output_file,
+            cmap_name='Reds'
         )
-        print(f"✅ IDW image created: {path}")
+
+        print(f"✅ IDW image created: {output_file}")
 
     return bounds, vmin, vmax
-
-
-###############################################################################
-def draw_arrow_wind_vectors(map_obj, df, scale=0.02, color='red'):
-    """
-    Draw arrows on a folium map using PolyLineTextPath to represent wind vectors.
-    """
-    for _, row in df.iterrows():
-        if pd.notna(row['U']) and pd.notna(row['V']):
-            start = [row['latitude'], row['longitude']]
-            end = [
-                row['latitude'] + row['V'] * scale,
-                row['longitude'] + row['U'] * scale
-            ]
-            line = PolyLine([start, end], color=color, weight=1)
-            line.add_to(map_obj)
-            # Add arrow along the line
-            PolyLineTextPath(
-                line,
-                '▶',  # '➤' or try '▶', '➔'
-                repeat=True,
-                offset=3,
-                attributes={'fill': color, 'font-weight': 'bold', 'font-size': '8'}
-            ).add_to(map_obj)
-
-###############################################################################
-def generate_distance_mask(df, bounds, num_cells=(800, 800), max_distance_km=10.0):
-    """
-    Generate a confidence mask based on distance from nearest station.
-    The mask is vertically flipped to match image orientation.
-
-    Parameters:
-        df: DataFrame with station coordinates (columns 'longitude', 'latitude')
-        bounds: ((lat_min, lon_min), (lat_max, lon_max))
-        num_cells: tuple (height, width) for the output mask resolution
-        max_distance_km: distance in kilometers beyond which confidence is 0
-
-    Returns:
-        2D NumPy array (height, width) with values in [0,1], vertically aligned to image
-    """
-    # === Grid dimensions ===
-    h, w = num_cells
-
-    (lat_min, lon_min), (lat_max, lon_max) = bounds
-    grid_x, grid_y = np.meshgrid(
-        np.linspace(lon_min, lon_max, w),
-        np.linspace(lat_min, lat_max, h)
-    )
-    grid_coords = np.vstack((grid_x.ravel(), grid_y.ravel())).T
-
-    # Station coordinates
-    station_coords = np.vstack((df['longitude'].values, df['latitude'].values)).T
-    tree = cKDTree(station_coords)
-    distances, _ = tree.query(grid_coords, k=1)
-
-    # Approx. conversion from degree to km (lat-based)
-    sample_point = (lat_min, lon_min)
-    one_deg_north = (lat_min + 1.0, lon_min)
-    km_per_deg = geodesic(sample_point, one_deg_north).km
-    distances_km = distances * km_per_deg
-
-    # Normalize to confidence in [0,1]
-    norm = Normalize(vmin=0, vmax=max_distance_km, clip=True)
-    confidence = 1 - norm(distances_km)
-    confidence_image = confidence.reshape((h, w))
-
-    # Flip vertically to match image coordinate system
-    return np.flipud(confidence_image)
 
 ###############################################################################
 def get_variogram_parameters(model_name):
@@ -752,30 +488,88 @@ def get_variogram_parameters(model_name):
         return {'sill': 0.0001, 'range': 0.1, 'nugget': 0.00001}
 
 ###############################################################################
-def generate_simple_kriging_grid(
+def generate_idw_grid(
+    target,
+    df,
+    bounds,
+    num_cells=300,
+    k=6,
+    power=1.2
+):
+    """
+    Compute a 2D grid of interpolated values using Inverse Distance Weighting (IDW).
+
+    Parameters:
+        target: column name of the target variable in df
+        df: DataFrame with 'longitude', 'latitude', and measurement columns
+        bounds: ((lat_min, lon_min), (lat_max, lon_max))
+        num_cells: number of grid cells along the longitude axis
+        k: number of nearest stations to use
+        power: IDW power parameter
+
+    Returns:
+        grid: interpolated grid (lat_cells x lon_cells)
+    """
+    # === Extract data ===
+    x = df['longitude'].values
+    y = df['latitude'].values
+    z = df[target].values
+    (lat_min, lon_min), (lat_max, lon_max) = bounds
+
+    # === Compute grid dimensions to preserve square cells ===
+    lon_cells = num_cells
+    lat_range = lat_max - lat_min
+    lon_range = lon_max - lon_min
+    lat_cells = int(lon_cells * lat_range / lon_range)
+
+    grid_lon = np.linspace(lon_min, lon_max, lon_cells)
+    grid_lat = np.linspace(lat_min, lat_max, lat_cells)
+    grid_x, grid_y = np.meshgrid(grid_lon, grid_lat)
+
+    # === Build KD-Tree for fast nearest neighbor search ===
+    tree = cKDTree(np.c_[x, y])
+    grid_points = np.c_[grid_x.ravel(), grid_y.ravel()]
+
+    distances, indices = tree.query(grid_points, k=k)
+
+    # === Compute IDW interpolation ===
+    if k == 1:
+        weights = np.ones_like(distances)
+        interpolated_values = z[indices]
+    else:
+        weights = 1 / np.power(distances + 1e-12, power)
+        weights /= weights.sum(axis=1, keepdims=True)
+        interpolated_values = np.sum(weights * z[indices], axis=1)
+
+    grid = interpolated_values.reshape(grid_y.shape)  # shape: (lat_cells, lon_cells)
+
+    return grid
+
+
+###############################################################################
+def generate_ordinary_kriging_grid(
+    target,
     df,
     bounds,
     num_cells=300,
     variogram_model='linear'
 ):
     """
-    Compute a 2D grid of interpolated Ox(ppm) values using Simple Kriging.
+    Compute a 2D grid of interpolated values using Simple Kriging.
 
     Parameters:
-        df: DataFrame with 'longitude', 'latitude', 'Ox(ppm)'
+        df: DataFrame with 'longitude', 'latitude', measuremants
         bounds: ((lat_min, lon_min), (lat_max, lon_max))
         num_cells: number of grid cells along the longitude axis
         variogram_model: variogram model name (e.g. 'linear', 'power', 'gaussian')
 
     Returns:
-        ox_grid: interpolated grid (lat_cells x lon_cells)
-        (lat_cells, lon_cells): dimensions of the grid
-        grid_x, grid_y: meshgrid arrays (lon and lat coordinates)
+        grid: interpolated grid (lat_cells x lon_cells)
     """
     # === Extract data ===
     x = df['longitude'].values
     y = df['latitude'].values
-    z = df['Ox(ppm)'].values
+    z = df[target].values
     (lat_min, lon_min), (lat_max, lon_max) = bounds
 
     # === Compute grid dimensions to preserve square cells ===
@@ -789,57 +583,33 @@ def generate_simple_kriging_grid(
     grid_x, grid_y = np.meshgrid(grid_lon, grid_lat)
 
     # === Kriging ===
-    params = get_variogram_parameters(variogram_model)
-    OK = OrdinaryKriging(
+    variogram_parameters = get_variogram_parameters(variogram_model)
+    ordinary_kriging = OrdinaryKriging(
         x, y, z,
-        variogram_model=variogram_model,
-        variogram_parameters=params,
+        variogram_model,
+        variogram_parameters,
         verbose=False,
         enable_plotting=False,
     )
 
-    z_interp, _ = OK.execute('grid', grid_lon, grid_lat)
-    ox_grid = np.array(z_interp)  # shape: (lat_cells, lon_cells)
+    z_interp, _ = ordinary_kriging.execute('grid', grid_lon, grid_lat)
+    grid = np.array(z_interp)  # shape: (lat_cells, lon_cells)
 
-    return ox_grid, (lat_cells, lon_cells), grid_x, grid_y
+    return grid
 
 ###############################################################################
-def generate_ox_kriging_confidence_overlay_image(
-    df,
-    bounds,
-    ox_grid,
-    ox_min,
-    ox_max,
-    output_file='ox_kriging_confidence.png',
-    max_distance_km=20,
-    cmap_name='Reds'
-):
-    """
-    Visualizes a Kriging result with a semi-transparent gray overlay in low-confidence areas
-    based on distance from measurement stations.
-
-    Parameters:
-        df: DataFrame with 'longitude', 'latitude', 'Ox(ppm)', and optional 'U', 'V' columns
-        bounds: ((lat_min, lon_min), (lat_max, lon_max))
-        ox_grid: 2D NumPy array with interpolated Ox(ppm) from Kriging (no flip)
-        ox_min, ox_max: color scale min/max
-        output_file: path to output PNG
-        max_distance_km: max distance considered reliable
-        cmap_name: colormap for Ox
-    """
-    x = df['longitude'].values
-    y = df['latitude'].values
-    (lat_min, lon_min), (lat_max, lon_max) = bounds
-
-    lat_cells, lon_cells = ox_grid.shape
-
-    # === Colormap ===
-    norm = np.clip((ox_grid - ox_min) / (ox_max - ox_min), 0, 1)
+def normalize_and_colorize_grid(grid, vmin, vmax, cmap_name):
+    norm = np.clip((grid - vmin) / (vmax - vmin), 0, 1)
     cmap = plt.get_cmap(cmap_name)
     color_img = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
+    return color_img
 
-    # === Confidence from distance ===
+###############################################################################
+def compute_confidence_mask(df_coords, grid_shape, bounds, max_distance_km):
     from scipy.spatial import cKDTree
+
+    (lat_min, lon_min), (lat_max, lon_max) = bounds
+    lat_cells, lon_cells = grid_shape
 
     grid_x, grid_y = np.meshgrid(
         np.linspace(lon_min, lon_max, lon_cells),
@@ -847,20 +617,22 @@ def generate_ox_kriging_confidence_overlay_image(
     )
     grid_coords = np.vstack((grid_x.ravel(), grid_y.ravel())).T
 
-    tree = cKDTree(np.vstack((x, y)).T)
+    tree = cKDTree(df_coords)
     dists, _ = tree.query(grid_coords, k=1)
-    dist_km = dists * 111  # ~111 km per degree
+    dist_km = dists * 111
     confidence = np.clip(1 - dist_km / max_distance_km, 0, 1).reshape((lat_cells, lon_cells))
+    return confidence
 
-    # === Confidence to gray alpha
-    low, high = 0.45, 0.55
-    gray_alpha = np.zeros_like(confidence)
+###############################################################################
+def create_confidence_overlay(confidence, color_img, low=0.45, high=0.55):
+    lat_cells, lon_cells, _ = color_img.shape
+    gray_alpha = np.zeros((lat_cells, lon_cells))
+
     gray_alpha[confidence <= low] = 180
     gray_alpha[confidence >= high] = 0
     fade = (high - confidence[(confidence > low) & (confidence < high)]) / (high - low)
     gray_alpha[(confidence > low) & (confidence < high)] = (fade * 180).astype(np.uint8)
 
-    # === Gray overlay blending
     gray_overlay = np.zeros((lat_cells, lon_cells, 4), dtype=np.uint8)
     gray_overlay[..., :3] = 200
     gray_overlay[..., 3] = gray_alpha.astype(np.uint8)
@@ -874,28 +646,46 @@ def generate_ox_kriging_confidence_overlay_image(
         gray_overlay[..., :3] * fg_alpha + rgba[..., :3] * (1 - fg_alpha)
     ).astype(np.uint8)
 
-    # === Plot ===
+    return rgba
+
+###############################################################################
+def plot_confidence_image(
+    rgba,
+    df,
+    bounds,
+    output_file,
+    title=None,
+    add_wind=True,
+    bbox=True,
+    station_marker=True
+):
+    x = df['longitude'].values
+    y = df['latitude'].values
+    (lat_min, lon_min), (lat_max, lon_max) = bounds
+
     fig, ax = plt.subplots(figsize=(8, 8 * (lat_max - lat_min) / (lon_max - lon_min)), dpi=200)
     ax.imshow(rgba, extent=(lon_min, lon_max, lat_min, lat_max), origin='lower')
     ax.axis('off')
 
-    # === Bounding box
-    rect = Rectangle(
-        (x.min(), y.min()),
-        x.max() - x.min(),
-        y.max() - y.min(),
-        linewidth=1.5,
-        edgecolor='black',
-        linestyle='--',
-        facecolor='none'
-    )
-    ax.add_patch(rect)
+    if title:
+        ax.set_title(title, fontsize=10)
 
-    # === Stations
-    ax.scatter(x, y, c='black', edgecolor='white', s=60, label='Stations')
+    if bbox:
+        rect = Rectangle(
+            (x.min(), y.min()),
+            x.max() - x.min(),
+            y.max() - y.min(),
+            linewidth=1.5,
+            edgecolor='black',
+            linestyle='--',
+            facecolor='none'
+        )
+        ax.add_patch(rect)
 
-    # === Wind
-    if 'U' in df.columns and 'V' in df.columns:
+    if station_marker:
+        ax.scatter(x, y, c='black', edgecolor='white', s=60, label='Stations')
+
+    if add_wind and 'U' in df.columns and 'V' in df.columns:
         ax.quiver(
             df['longitude'], df['latitude'],
             df['U'], df['V'],
@@ -906,5 +696,28 @@ def generate_ox_kriging_confidence_overlay_image(
     plt.tight_layout()
     plt.savefig(output_file, bbox_inches='tight', pad_inches=0)
     plt.close()
-    print(f"✅ Saved Kriging confidence overlay image to {output_file}")
+    print(f"✅ Saved confidence overlay to {output_file}")
 
+###############################################################################
+def generate_confidence_overlay_image(
+    df,
+    bounds,
+    grid,
+    vmin,
+    vmax,
+    output_file,
+    cmap_name='viridis',
+    max_distance_km=15,
+    title=None,
+    add_wind=True,
+    bbox=True,
+    station_marker=True
+):
+    x = df['longitude'].values
+    y = df['latitude'].values
+    df_coords = np.column_stack((x, y))
+
+    color_img = normalize_and_colorize_grid(grid, vmin, vmax, cmap_name)
+    confidence = compute_confidence_mask(df_coords, grid.shape, bounds, max_distance_km)
+    rgba = create_confidence_overlay(confidence, color_img)
+    plot_confidence_image(rgba, df, bounds, output_file, title, add_wind, bbox, station_marker)

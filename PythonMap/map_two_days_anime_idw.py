@@ -42,12 +42,13 @@ def build_image_overlay_js(image_paths, bounds, opacity=0.7):
 
 ###############################################################################
 def inject_animation_and_controls(
+    target,
     html_file_path,
     image_folder,
     bounds,
-    ox_min,
-    ox_max,
-    image_prefix="ox_idw_",
+    vmin,
+    vmax,
+    image_prefix="idw_",
     interval_ms=1000,
     opacity=0.7
 ):
@@ -110,14 +111,14 @@ def inject_animation_and_controls(
 
 <div class="scale-box">
   <div style="font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 6px;">
-    Ox (ppm)
+    {{ target }}
   </div>
   <div style="width: 150px; height: 12px;
               background: linear-gradient(to right, white, red);
               margin-bottom: 4px;"></div>
   <div style="display: flex; justify-content: space-between; font-size: 12px;">
-    <span>{{ ox_min }}</span>
-    <span>{{ ox_max }}</span>
+    <span>{{ vmin }}</span>
+    <span>{{ vmax }}</span>
   </div>
 </div>
 
@@ -181,8 +182,8 @@ setupAnimation();
         labels=labels_js,
         interval=interval_ms,
         max_index=len(labels) - 1,
-        ox_min=f"{ox_min:.3f}",
-        ox_max=f"{ox_max:.3f}"
+        vmin=f"{vmin:.3f}",
+        vmax=f"{vmax:.3f}"
     )
 
     with open(html_file_path, "r", encoding="utf-8") as f:
@@ -223,25 +224,31 @@ center_lon = sum(r['longitude'] for r in records) / len(records)
 m = folium.Map(location=[center_lat, center_lon], zoom_start=10)
 
 # Save map
-html_file_name = "OxMapIDW_LastTwoDays.html"
+html_file_name = "map_two_days_anime_idw.html"
 m.save(html_file_name)
 print(f"Map saved to: {html_file_name}")
 
-bounds, ox_min, ox_max = generate_idw_images_by_hour(
+image_folder = "idw_frames"
+image_prefix = "idw_"
+
+bounds, vmin, vmax = generate_idw_images_by_hour(
     target,
     records,
     k=7,
     power=1.0,
-    output_dir="idw_frames",
-    num_cells=800,
+    output_dir=image_folder,
+    image_prefix=image_prefix,
+    num_cells=300,
     overwrite=True
 )
 
 inject_animation_and_controls(
+    target,
     html_file_path=html_file_name,
-    image_folder="idw_frames",
+    image_folder=image_folder,
     bounds=bounds,
-    ox_min=ox_min,
-    ox_max=ox_max,
+    vmin=vmin,
+    vmax=vmax,
+    image_prefix=image_prefix,
     interval_ms=1000
 )

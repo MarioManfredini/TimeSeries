@@ -6,13 +6,17 @@ Author: Mario
 """
 import os
 import time
+import matplotlib.pyplot as plt
+
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.units import mm
+from reportlab.platypus import Table, TableStyle
+from reportlab.lib import colors
 from PIL import Image
-import matplotlib.pyplot as plt
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+
 
 ###############################################################################
 def capture_html_map_screenshot(html_path, output_image="map_screenshot.jpg", delay=2, width=1024, height=768):
@@ -38,156 +42,6 @@ def capture_html_map_screenshot(html_path, output_image="map_screenshot.jpg", de
 
     print(f"✅ Screenshot saved to {output_image}")
     return output_image
-
-###############################################################################
-def save_idw_formula_as_jpg(filename="formula_idw.jpg"):
-    formula = (
-        r"$\hat{z}(x_0) = \frac{\sum_{i=1}^{k} w_i z_i}"
-        r"{\sum_{i=1}^{k} w_i}, \quad \text{where } w_i = \frac{1}{d(x_0, x_i)^p}$"
-    )
-
-    explanation_lines = [
-        r"$x_0$: location to interpolate",
-        r"$x_i$: known data point location",
-        r"$z_i$: known value at $x_i$",
-        r"$d(x_0, x_i)$: distance between $x_0$ and $x_i$",
-        r"$w_i$: weight of $z_i$",
-        r"$p$: power parameter (controls weight decay)",
-        r"$k$: number of nearest neighbors"
-    ]
-
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.axis('off')
-
-    # Formula centered on top
-    ax.text(0, 1, formula, fontsize=18, ha='left', va='center')
-
-    # Explanation aligned to left below
-    y_start = 0.7
-    line_spacing = 0.07
-    for i, line in enumerate(explanation_lines):
-        ax.text(0, y_start - i * line_spacing, line,
-                fontsize=12, ha='left', va='center')
-
-    plt.tight_layout()
-
-    temp_file = "_temp_formula.png"
-    fig.savefig(temp_file, dpi=300, bbox_inches='tight', pad_inches=0.2)
-    plt.close(fig)
-
-    img = Image.open(temp_file).convert("RGB")
-    img.save(filename, format="JPEG", quality=95)
-    img.close()
-
-    os.remove(temp_file)
-    print(f"✅ Saved JPEG formula image with explanation as {filename}")
-
-
-###############################################################################
-def save_idw_report_pdf(
-    output_path,
-    results,
-    formula_image_path='formula_idw.jpg',
-    html_screenshot_path='map_screenshot.jpg',
-    idw_labels_image_path='ox_idw_labels.png',
-    additional_image_path='idw_loocv_plot.jpg',
-    title="IDW Cross-validation Report"
-):
-    page_width, page_height = landscape(A4)
-    c = canvas.Canvas(output_path, pagesize=(page_width, page_height))
-    margin = 15 * mm
-    col_split = page_width / 2
-
-    col1_w = page_width * (1 / 3)
-    col2_w = page_width * (2 / 3)
-
-    # === Title ===
-    c.setFont("Helvetica-Bold", 15)
-    c.drawString(margin, page_height - margin, title)
-
-    # === Formula ===
-    if formula_image_path and os.path.exists(formula_image_path):
-        formula_w = col_split - 2 * margin
-        formula_h = 40 * mm
-        c.drawImage(formula_image_path, margin, page_height - margin - 45 * mm,
-                    width=formula_w, height=formula_h, preserveAspectRatio=True, mask='auto')
-    else:
-        c.setFont("Helvetica", 10)
-        c.drawString(margin, page_height - margin - 10 * mm, "(Formula image missing)")
-
-    # === Static IDW map with station labels ===
-    if idw_labels_image_path and os.path.exists(idw_labels_image_path):
-        img = Image.open(idw_labels_image_path)
-        img_w, img_h = img.size
-        aspect = img_h / img_w
-
-        image_target_width = col1_w - 2 * margin
-        image_target_height = image_target_width * aspect
-
-        x_img = margin
-        y_img = (page_height - image_target_height) / 2
-
-        c.drawImage(idw_labels_image_path, x_img, y_img,
-                    width=image_target_width, height=image_target_height,
-                    preserveAspectRatio=True, mask='auto')
-    else:
-        c.setFont("Helvetica", 10)
-        c.drawString(col_split + margin, page_height / 2, "(Map image missing)")
-
-    # === Map Screenshot (top-right) ===
-    map_x = col1_w + margin
-    map_max_w = col2_w - 2 * margin
-    map_max_h = 90 * mm
-    y_map = page_height - margin - map_max_h
-    if html_screenshot_path and os.path.exists(html_screenshot_path):
-        img = Image.open(html_screenshot_path)
-        aspect = img.height / img.width
-        new_w = map_max_w
-        new_h = new_w * aspect
-        if new_h > map_max_h:
-            new_h = map_max_h
-            new_w = new_h / aspect
-        c.drawImage(html_screenshot_path, map_x, y_map,
-                    width=new_w, height=new_h, preserveAspectRatio=True, mask="auto")
-    else:
-        c.setFont("Helvetica", 10)
-        c.drawString(map_x, page_height / 2, "(Screenshot missing)")
-
-    # === Table of results (bottom-left) ===
-    table_x = map_x
-    table_y = y_map - 5 * mm
-    c.setFont("Helvetica-Bold", 8)
-    c.drawString(table_x, table_y, "k   p    RMSE       MAE       R²")
-    c.setFont("Helvetica", 7)
-    for i, (k, power, rmse, mae, r2) in enumerate(results):
-        y = table_y - (i + 1) * 4 * mm
-        line = f"{k:<2d}  {power:<5.2f}   {rmse:<8.5f}  {mae:<8.5f}  {r2:<6.3f}"
-        c.drawString(table_x, y, line)
-
-    # === Additional image (bottom-right) ===
-    if additional_image_path and os.path.exists(additional_image_path):
-        img = Image.open(additional_image_path)
-        img_w, img_h = img.size
-        aspect = img_h / img_w
-
-        add_img_w = map_max_w / 2
-        add_img_h = add_img_w * aspect
-        if add_img_h > 80 * mm:
-            add_img_h = 80 * mm
-            add_img_w = add_img_h / aspect
-
-        x_add_img = map_x + map_max_w - add_img_w
-        y_add_img = table_y - add_img_h
-        c.drawImage(additional_image_path, x_add_img, y_add_img,
-                    width=add_img_w, height=add_img_h,
-                    preserveAspectRatio=True, mask='auto')
-    else:
-        c.setFont("Helvetica", 10)
-        c.drawString(map_x + map_max_w - 50 * mm, margin + 5 * mm, "(Additional image missing)")
-
-    c.showPage()
-    c.save()
-    print(f"✅ PDF report saved to: {output_path}")
 
 ###############################################################################
 def save_kriging_formula_as_jpg(filename="formula_kriging.jpg"):
@@ -560,3 +414,142 @@ def save_lgbm_kriging_formula_as_jpg(filename="formula_lgbm_kriging.jpg"):
     os.remove(temp_file)
 
     print(f"✅ Saved LGBM + Kriging formula JPEG to {filename}")
+
+###############################################################################
+def save_model_report_pdf(
+    output_path,
+    table_data,
+    column_headers,
+    formula_image_path=None,
+    map_image_path=None,
+    labels_image_path=None,
+    additional_image_path=None,
+    title="Model Report"
+):
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.units import mm
+    from PIL import Image
+    import os
+
+    page_width, page_height = landscape(A4)
+    c = canvas.Canvas(output_path, pagesize=(page_width, page_height))
+    margin = 15 * mm
+
+    col1_w = page_width * (1 / 3)
+    col2_w = page_width * (2 / 3)
+
+    # === Title ===
+    c.setFont("Helvetica-Bold", 15)
+    c.drawString(margin, page_height - margin, title)
+
+    # === Formula image ===
+    if formula_image_path and os.path.exists(formula_image_path):
+        formula_image = Image.open(formula_image_path)
+        formula_image_w, formula_image_h = formula_image.size
+        formula_image_aspect = formula_image_h / formula_image_w
+
+        image_target_width = col1_w - margin
+        image_target_height = image_target_width * formula_image_aspect
+
+        x_img = margin
+        y_img = page_height - margin - image_target_height - 15 * mm
+
+        c.drawImage(formula_image_path, x_img, y_img,
+                    width=image_target_width, height=image_target_height,
+                    preserveAspectRatio=True, mask='auto')
+    else:
+        c.setFont("Helvetica", 10)
+        c.drawString(margin, page_height - margin - 10 * mm, "(Formula image missing)")
+
+    # === Labels image (e.g. Kriging or IDW map with station values) ===
+    if labels_image_path and os.path.exists(labels_image_path):
+        labels_image = Image.open(labels_image_path)
+        labels_image_w, labels_image_h = labels_image.size
+        labels_image_aspect = labels_image_h / labels_image_w
+
+        image_target_width = col1_w - margin
+        image_target_height = image_target_width * labels_image_aspect
+
+        x_img = margin
+        y_img = margin
+
+        c.drawImage(labels_image_path, x_img, y_img,
+                    width=image_target_width, height=image_target_height,
+                    preserveAspectRatio=True, mask='auto')
+    else:
+        c.setFont("Helvetica", 10)
+        c.drawString(margin, page_height / 2, "(Labels image missing)")
+
+    # === Map image (e.g. screenshot of folium map) ===
+    map_x = col1_w + margin
+    map_max_w = col2_w - 2 * margin
+    map_max_h = 80 * mm
+    y_map = page_height - (margin * 1.5) - map_max_h
+    if map_image_path and os.path.exists(map_image_path):
+        img = Image.open(map_image_path)
+        aspect = img.height / img.width
+        new_w = map_max_w
+        new_h = new_w * aspect
+        if new_h > map_max_h:
+            new_h = map_max_h
+            new_w = new_h / aspect
+        c.drawImage(map_image_path, map_x, y_map,
+                    width=new_w, height=new_h, preserveAspectRatio=True, mask="auto")
+    else:
+        c.setFont("Helvetica", 10)
+        c.drawString(map_x, y_map + map_max_h / 2, "(Map image missing)")
+
+    # === Create and draw the table using Platypus ===
+    # Convert column_headers and table_data to full table format
+    data = [column_headers] + table_data
+    
+    col_widths = [16 * mm] * len(column_headers)
+    table = Table(data, colWidths=col_widths)
+    # Style the table
+    style = TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (-1, 0), 8),
+        ('FONTSIZE', (0, 1), (-1, -1), 7),
+        ('TOPPADDING', (0, 0), (-1, -1), 1),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0.8),
+        ('GRID', (0, 0), (-1, -1), 0.2, colors.black),
+    ])
+    table.setStyle(style)
+    
+    # Convert y from bottom-left origin (Platypus uses top-down)
+    table_x = map_x
+    table_y = y_map - 5 * mm
+    
+    # Wrap and draw the table at a fixed position
+    table.wrapOn(c, 0, 0)
+    table.drawOn(c, table_x, table_y - table._height)
+
+    # === Additional image (bottom-right) ===
+    if additional_image_path and os.path.exists(additional_image_path):
+        img = Image.open(additional_image_path)
+        img_w, img_h = img.size
+        aspect = img_h / img_w
+
+        add_img_w = map_max_w / 2
+        add_img_h = add_img_w * aspect
+        if add_img_h > 80 * mm:
+            add_img_h = 80 * mm
+            add_img_w = add_img_h / aspect
+
+        x_add_img = map_x + map_max_w - add_img_w
+        y_add_img = table_y - add_img_h
+        c.drawImage(additional_image_path, x_add_img, y_add_img,
+                    width=add_img_w, height=add_img_h,
+                    preserveAspectRatio=True, mask='auto')
+    else:
+        c.setFont("Helvetica", 10)
+        c.drawString(map_x + map_max_w - 50 * mm, margin + 5 * mm, "(Additional image missing)")
+
+    c.showPage()
+    c.save()
+    print(f"✅ PDF report saved to: {output_path}")
