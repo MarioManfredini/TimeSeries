@@ -7,30 +7,31 @@ Author: Mario
 import os
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 import folium
+
 from folium.raster_layers import ImageOverlay
-from map_utils import (
-    load_station_temporal_features,
-    compute_bounds_from_df,
-    generate_simple_kriging_grid,
-    generate_ox_kriging_confidence_overlay_image
-)
-from map_report import save_kriging_report_pdf, capture_html_map_screenshot, save_kriging_formula_as_jpg
 from pykrige.ok import OrdinaryKriging
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from pykrige.uk import UniversalKriging
 
+from map_utils import (
+    load_station_temporal_features,
+    compute_bounds_from_df,
+    generate_universal_kriging_grid,
+    generate_confidence_overlay_image
+)
+from map_report import save_model_report_pdf, capture_html_map_screenshot, save_kriging_formula_as_jpg, plot_loocv_results
 
 ###############################################################################
-def evaluate_universal_kriging_loocv(df, variogram_model='linear', transform=None, drift_terms=None):
+def evaluate_universal_kriging_loocv(target, df, variogram_model='gaussian', transform=None, drift_terms=None):
     """
     LOOCV evaluation for Universal Kriging using external drift variables.
 
     Parameters:
-        df: pandas DataFrame with 'longitude', 'latitude', 'Ox(ppm)', and external drift variables
-        variogram_model: str (e.g., 'linear', 'gaussian', 'spherical')
+        df: pandas DataFrame with 'longitude', 'latitude', measurements, and external drift variables
+        variogram_model: str (e.g., 'gaussian', 'spherical')
         transform: 'log', 'sqrt', or None
         drift_terms: list of column names to use as external drift (e.g., ['NO(ppm)', 'NO2(ppm)', 'U', 'V'])
 
@@ -40,7 +41,7 @@ def evaluate_universal_kriging_loocv(df, variogram_model='linear', transform=Non
     epsilon = 1e-4
     x_all = df['longitude'].values
     y_all = df['latitude'].values
-    z_raw = df['Ox(ppm)'].values
+    z_raw = df[target].values
 
     # === Apply transformation ===
     if transform == 'log':
@@ -58,6 +59,9 @@ def evaluate_universal_kriging_loocv(df, variogram_model='linear', transform=Non
 
     external_drift = df[drift_terms].values
 
+    dups = df[['longitude', 'latitude']].duplicated().sum()
+    print(f"[DEBUG] Number of duplicate coordinates: {dups}")
+
     preds = []
     trues = []
 
@@ -67,23 +71,21 @@ def evaluate_universal_kriging_loocv(df, variogram_model='linear', transform=Non
             y_train = np.delete(y_all, i)
             z_train = np.delete(z_all, i)
             drift_train = np.delete(external_drift, i, axis=0)
-
+            #print(f"x_train shape: {x_train.shape}, drift_train shape: {drift_train.shape}")
+            
             x_test = x_all[i]
             y_test = y_all[i]
-            drift_test = external_drift[i].reshape(1, -1)
 
             uk = UniversalKriging(
-                x_train,
-                y_train,
-                z_train,
+                x_train, y_train, z_train,
                 variogram_model=variogram_model,
+                variogram_parameters=None,
                 drift_terms=drift_terms,
                 external_drift=drift_train,
                 verbose=False,
                 enable_plotting=False
             )
 
-            # NB: no external_drift here!
             z_pred_transf, _ = uk.execute('points', np.array([x_test]), np.array([y_test]))
             z_pred = inverse_transform(z_pred_transf[0])
             preds.append(z_pred)
@@ -100,79 +102,37 @@ def evaluate_universal_kriging_loocv(df, variogram_model='linear', transform=Non
     rmse = mse ** 0.5
     mae = mean_absolute_error(trues, preds)
     r2 = r2_score(trues, preds)
-    return rmse, mae, r2, trues, preds
-
-
-
-###############################################################################
-def plot_kriging_loocv_results(rmse, mae, r2, trues, preds, output_path="kriging_loocv_plot.jpg"):
-    """
-    Generates and saves a combined plot:
-    - Top: scatter plot (true vs predicted)
-    - Bottom: line plot (true and predicted values)
-
-    Parameters:
-        trues: list or array of true Ox values
-        preds: list or array of predicted Ox values
-        output_path: path to save the resulting image
-    """
-    trues = np.array(trues)
-    preds = np.array(preds)
-
-    fig, axs = plt.subplots(2, 1, figsize=(6, 8), dpi=200)
-
-    # === 1. Scatter plot ===
-    axs[0].scatter(trues, preds, alpha=0.8)
-    axs[0].plot([trues.min(), trues.max()], [trues.min(), trues.max()], 'r--')
-    axs[0].set_xlabel("True Ox(ppm)")
-    axs[0].set_ylabel("Predicted Ox(ppm)")
-    axs[0].set_title(f"Kriging LOOCV - True vs Predicted\nRMSE={rmse:.5f}, MAE={mae:.5f}, R²={r2:.3f}")
-    axs[0].grid(True)
-    axs[0].axis("equal")
-
-    # === 2. Line plot ===
-    axs[1].plot(trues, label="True", color="black", linewidth=1.5)
-    axs[1].plot(preds, label="Predicted", color="blue", linestyle="--")
-    axs[1].set_title("True vs Predicted (Index order)")
-    axs[1].set_xlabel("Index")
-    axs[1].set_ylabel("Ox(ppm)")
-    axs[1].grid(True)
-    axs[1].legend()
-
-    plt.tight_layout()
-    plt.savefig(output_path, bbox_inches="tight", pad_inches=0.1)
-    plt.close()
-    print(f"✅ Kriging LOOCV plot saved to: {output_path}")
+    return rmse, mae, r2, np.array(trues), np.array(preds)
 
 ###############################################################################
 def generate_kriging_image_with_labels_only(
     df,
     bounds,
-    ox_min,
-    ox_max,
-    variogram_model='linear',
+    vmin,
+    vmax,
+    variogram_model='gaussian',
     transform=None,
-    output_file='ox_kriging_labels.png',
+    output_file='kriging_labels.png',
     num_cells=800
 ):
     """
-    Generate a Simple Kriging interpolated grayscale image with station locations and Ox labels (no map, no wind).
+    Generate a Simple Kriging interpolated grayscale image with station locations and labels (no map, no wind).
 
     Parameters:
-        df: DataFrame with columns ['longitude', 'latitude', 'Ox(ppm)']
+        df: DataFrame with columns ['longitude', 'latitude', measurements]
         bounds: ((lat_min, lon_min), (lat_max, lon_max))
-        ox_min, ox_max: fixed grayscale scale
-        variogram_model: variogram model type ('linear', 'spherical', etc.)
+        vmin, vmax: fixed grayscale scale
+        variogram_model: variogram model type ('gaussian', 'spherical', etc.)
         output_file: path to save resulting PNG
         num_cells: resolution of interpolation grid
         transform: None, 'log', or 'sqrt' to apply to target variable
     """
-    if ox_min is None or ox_max is None:
-        raise ValueError("ox_min and ox_max must be provided to ensure consistent grayscale.")
+    if vmin is None or vmax is None:
+        raise ValueError("vmin and vmax must be provided to ensure consistent grayscale.")
 
     x = df['longitude'].values
     y = df['latitude'].values
-    z_raw = df['Ox(ppm)'].values
+    z_raw = df[target].values
     
     # === Apply transformation ===
     epsilon = 1e-4  # For log transform
@@ -215,8 +175,8 @@ def generate_kriging_image_with_labels_only(
         grid_z,
         extent=(lon_min, lon_max, lat_min, lat_max),
         origin='lower',
-        vmin=ox_min,
-        vmax=ox_max,
+        vmin=vmin,
+        vmax=vmax,
         cmap='Greys',
         alpha=0.9,
         aspect='auto'
@@ -241,7 +201,7 @@ def generate_kriging_image_with_labels_only(
         ax.text(
             row['longitude'] + 0.01,
             row['latitude'] + 0.005,
-            f"{row['Ox(ppm)']:.3f}",
+            f"{row[target]:.3f}",
             fontsize=6,
             color='black',
             bbox=dict(facecolor='white', edgecolor='none', alpha=0.7, pad=1),
@@ -269,7 +229,6 @@ hour=19
 # === Load station coordinates ===
 df = pd.read_csv(csv_path, skipinitialspace=True)
 
-# === Load and merge latest Ox data ===
 df = load_station_temporal_features(
     data_dir,
     df,
@@ -284,8 +243,8 @@ df = load_station_temporal_features(
 
 print("[DEBUG] Final dataframe shape:", df.shape)
 
-drift_vars = df.columns.tolist()
-print("[DEBUG] Columns:", drift_vars)
+drift_terms = df.columns.tolist()
+print("[DEBUG] Columns:", drift_terms)
 
 print("[DEBUG] Missing values per column:")
 print(df.isna().sum())
@@ -293,6 +252,15 @@ print(df.isna().sum())
 dups = df[['longitude', 'latitude']].duplicated().sum()
 if dups > 0:
     print(f"[WARN] Found {dups} duplicate coordinates.")
+
+print("[DEBUG] External drift columns:", drift_terms)
+
+external_drift = df[drift_terms]
+print("[DEBUG] External drift sample values:")
+print(external_drift.head())
+
+print("[DEBUG] Missing values in external drift:")
+print(external_drift.isna().sum())
 
 models = ['linear', 'gaussian', 'exponential', 'spherical']
 transforms = [None, 'log', 'sqrt']
@@ -303,10 +271,11 @@ results = []
 for model in models:
     for transform in transforms:
         rmse, mae, r2, trues, preds = evaluate_universal_kriging_loocv(
+            target,
             df,
             variogram_model=model,
             transform=transform,
-            drift_terms=drift_vars
+            drift_terms=drift_terms
         )
         t_label = transform if transform else "none"
         print(f"{model:10s} | {t_label:9s} | {rmse:8.5f} | {mae:8.5f} | {r2:6.3f}")
@@ -318,36 +287,40 @@ best_transform = best[1]
 print(f"\n✅ Best model by R²: {best_model}, {best_transform} transform → RMSE={best[2]:.5f}, MAE={best[3]:.5f}, R²={best[4]:.3f}")
 
 rmse, mae, r2, trues, preds = evaluate_universal_kriging_loocv(
+    target,
     df,
     variogram_model=best_model,
     transform=best_transform,
-    drift_terms=drift_vars
+    drift_terms=drift_terms
 )
-ox_kriging_loocv="loocv.png"
-plot_kriging_loocv_results(rmse, mae, r2, trues, preds, ox_kriging_loocv)
+loocv_image="loocv.png"
+plot_loocv_results(target, rmse, mae, r2, trues, preds, loocv_image)
 
 # === Compute bounds and color scale ===
 bounds = compute_bounds_from_df(df, margin_ratio=0.10)
-ox_min = np.percentile(df[target], 5)
-ox_max = np.percentile(df[target], 95)
+vmin = np.percentile(df[target], 5)
+vmax = np.percentile(df[target], 95)
 
 # === Generate Kriging interpolated image ===
-kriging_image_path = 'prediction.png'
-ox_grid, (lat_cells, lon_cells), grid_x, grid_y = generate_simple_kriging_grid(
+grid = generate_universal_kriging_grid(
+    target,
     df,
     bounds,
+    drift_terms,
     num_cells=300,
-    variogram_model='spherical' # 'linear', 'gaussian', 'exponential', 'spherical'
+    variogram_model=best_model
 )
-generate_ox_kriging_confidence_overlay_image(
-    df=df,
-    bounds=bounds,
-    ox_grid=ox_grid,  # interpolazione Kriging già calcolata
-    ox_min=ox_min,
-    ox_max=ox_max,
-    output_file=kriging_image_path,
-    max_distance_km=15,
-    cmap_name="Reds"
+
+# === Generate confidence overlay image ===
+output_file = 'prediction.png'
+generate_confidence_overlay_image(
+    df,
+    bounds,
+    grid,
+    vmin,
+    vmax,
+    output_file,
+    cmap_name='Reds'
 )
 
 # === Create folium map with image overlay ===
@@ -359,8 +332,8 @@ center_lon = x.mean()
 m = folium.Map(location=[center_lat, center_lon], zoom_start=10)
 
 image_overlay = ImageOverlay(
-    name="Universal Kriging Ox(ppm)",
-    image=kriging_image_path,
+    name=f"Universal Kriging {target}",
+    image=output_file,
     bounds=[[bounds[0][0], bounds[0][1]], [bounds[1][0], bounds[1][1]]],
     opacity=0.7,
     interactive=False,
@@ -370,8 +343,8 @@ image_overlay = ImageOverlay(
 image_overlay.add_to(m)
 
 # Save interactive map
-m.save("OxMapUniversalKriging_LastHour.html")
-html_path = "OxMapUniversalKriging_LastHour.html"
+html_path = "map_one_hour_universal_kriging.html"
+m.save(html_path)
 print(f"✅ Map saved to: {html_path}")
 
 formula_image_path = 'formula.jpg'
@@ -381,8 +354,8 @@ kriging_labels_image_path = 'labels_image.png'
 generate_kriging_image_with_labels_only(
     df,
     bounds,
-    ox_min,
-    ox_max,
+    vmin,
+    vmax,
     variogram_model=best_model,
     transform=best_transform,
     output_file=kriging_labels_image_path,
@@ -392,12 +365,24 @@ generate_kriging_image_with_labels_only(
 screenshot_path = "screenshot.jpg"
 capture_html_map_screenshot(html_path, screenshot_path)
 
-save_kriging_report_pdf(
+column_headers = ["Variogram", "Transform", "RMSE", "MAE", "R²"]
+table_data = []
+for model, t_label, rmse, mae, r2 in results:
+    table_data.append([
+        f"{model}",
+        f"{t_label}",
+        f"{rmse:.5f}",
+        f"{mae:.5f}",
+        f"{r2:.3f}"
+    ])
+
+save_model_report_pdf(
     output_path="universal_kriging_report.pdf",
-    results=results,  # lista di tuple (model, transform, rmse, mae, r2)
+    table_data=table_data,
+    column_headers=column_headers,
     formula_image_path=formula_image_path,
-    html_screenshot_path=screenshot_path,
-    additional_image_path=ox_kriging_loocv,
-    kriging_labels_image_path=kriging_labels_image_path,
+    map_image_path=screenshot_path,
+    labels_image_path=kriging_labels_image_path,
+    additional_image_path=loocv_image,
     title=f"Universal Kriging Interpolation - {year}/{month}/{day} {hour:02d}H"
 )

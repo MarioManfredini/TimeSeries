@@ -8,85 +8,46 @@ import os
 import pandas as pd
 import numpy as np
 import folium
+import matplotlib.pyplot as plt
+
 from folium.raster_layers import ImageOverlay
-from map_utils import (
-    load_station_temporal_features,
-    compute_bounds_from_df
-)
-from map_report import capture_html_map_screenshot, save_map_report_pdf, save_rf_formula_as_jpg
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from sklearn.preprocessing import StandardScaler
+from PIL import Image
 
-###############################################################################
-def plot_rf_loocv_results(rmse, mae, r2, trues, preds, output_path="ox_rf_loocv.jpg"):
-    """
-    Generates and saves a combined plot:
-    - Top: scatter plot (true vs predicted)
-    - Bottom: line plot (true and predicted values)
-
-    Parameters:
-        trues: list or array of true Ox values
-        preds: list or array of predicted Ox values
-        output_path: path to save the resulting image
-    """
-    trues = np.array(trues)
-    preds = np.array(preds)
-
-    fig, axs = plt.subplots(2, 1, figsize=(6, 8), dpi=200)
-
-    # === 1. Scatter plot ===
-    axs[0].scatter(trues, preds, alpha=0.8)
-    axs[0].plot([trues.min(), trues.max()], [trues.min(), trues.max()], 'r--')
-    axs[0].set_xlabel("True Ox(ppm)")
-    axs[0].set_ylabel("Predicted Ox(ppm)")
-    axs[0].set_title(f"Random Forest LOOCV - True vs Predicted\nRMSE={rmse:.5f}, MAE={mae:.5f}, R²={r2:.3f}")
-    axs[0].grid(True)
-    axs[0].axis("equal")
-
-    # === 2. Line plot ===
-    axs[1].plot(trues, label="True", color="black", linewidth=1.5)
-    axs[1].plot(preds, label="Predicted", color="blue", linestyle="--")
-    axs[1].set_title("True vs Predicted (Index order)")
-    axs[1].set_xlabel("Index")
-    axs[1].set_ylabel("Ox(ppm)")
-    axs[1].grid(True)
-    axs[1].legend()
-
-    plt.tight_layout()
-    plt.savefig(output_path, bbox_inches="tight", pad_inches=0.1)
-    plt.close()
-    print(f"✅ Random Forest LOOCV plot saved to: {output_path}")
+from map_utils import load_station_temporal_features, compute_bounds_from_df
+from map_report import capture_html_map_screenshot, save_model_report_pdf, plot_loocv_results
 
 ###############################################################################
 def generate_rf_image_with_labels_only(
+    target,
     df,
     bounds,
-    ox_min,
-    ox_max,
+    vmin,
+    vmax,
     model,
     scaler,
     features,
-    output_file='ox_rf_labels.png',
+    output_file='labels_image.png',
     num_cells=800
 ):
     """
-    Generate a grayscale image with predicted Ox values using Random Forest.
+    Generate a grayscale image with predicted values using Random Forest.
 
     Parameters:
-        df: DataFrame with required features and columns ['longitude', 'latitude', 'Ox(ppm)']
+        df: DataFrame with required features and columns ['longitude', 'latitude', measurements]
         bounds: ((lat_min, lon_min), (lat_max, lon_max))
-        ox_min, ox_max: fixed grayscale range for consistency
+        vmin, vmax: fixed grayscale range for consistency
         model: trained RandomForestRegressor
         scaler: fitted scaler (StandardScaler or MinMaxScaler)
         features: list of features used during training
         output_file: path to save PNG
         num_cells: resolution of grid
     """
-    if ox_min is None or ox_max is None:
-        raise ValueError("ox_min and ox_max must be provided.")
+    if vmin is None or vmax is None:
+        raise ValueError("vmin and vmax must be provided.")
 
     (lat_min, lon_min), (lat_max, lon_max) = bounds
 
@@ -147,8 +108,8 @@ def generate_rf_image_with_labels_only(
         grid_z,
         extent=(lon_min, lon_max, lat_min, lat_max),
         origin='lower',
-        vmin=ox_min,
-        vmax=ox_max,
+        vmin=vmin,
+        vmax=vmax,
         cmap='Greys',
         alpha=0.9,
         aspect='auto'
@@ -171,12 +132,12 @@ def generate_rf_image_with_labels_only(
     # Markers and labels
     ax.scatter(x, y, c='black', edgecolor='white', s=50, zorder=5)
     for i, row in df.iterrows():
-        ox_value = row.get('Ox(ppm)', None)
-        if pd.notna(ox_value):
+        value = row.get(target, None)
+        if pd.notna(value):
             ax.text(
                 row['longitude'] + 0.01,
                 row['latitude'] + 0.005,
-                f"{ox_value:.3f}",
+                f"{value:.3f}",
                 fontsize=6,
                 color='black',
                 bbox=dict(facecolor='white', edgecolor='none', alpha=0.7, pad=1),
@@ -190,14 +151,14 @@ def generate_rf_image_with_labels_only(
 
 
 ###############################################################################
-def generate_ox_rf_confidence_overlay_image(
+def generate_rf_confidence_overlay_image(
     df,
     bounds,
     model,
     features,
-    ox_min,
-    ox_max,
-    output_file="ox_rf_prediction.png",
+    vmin,
+    vmax,
+    output_file="prediction.png",
     num_cells=300,
     max_distance_km=20,
     cmap_name="Reds",
@@ -211,7 +172,7 @@ def generate_ox_rf_confidence_overlay_image(
         bounds: ((lat_min, lon_min), (lat_max, lon_max)) bounds for the map
         model: trained model
         features: list of feature names to use in prediction
-        ox_min, ox_max: min and max values for color scaling
+        vmin, vmax: min and max values for color scaling
         output_file: path to save the output PNG image
         num_cells: number of grid cells along the x-axis
         max_distance_km: max distance considered reliable
@@ -281,7 +242,7 @@ def generate_ox_rf_confidence_overlay_image(
     grid_z = y_pred.reshape((lat_cells, lon_cells))
 
     # === Colori
-    norm = np.clip((grid_z - ox_min) / (ox_max - ox_min), 0, 1)
+    norm = np.clip((grid_z - vmin) / (vmax - vmin), 0, 1)
     cmap = plt.get_cmap(cmap_name)
     color_img = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
 
@@ -345,6 +306,56 @@ def generate_ox_rf_confidence_overlay_image(
     print(f"✅ Random Forest prediction image saved to: {output_file}")
 
 ###############################################################################
+def save_rf_formula_as_jpg(filename="formula_rf.jpg"):
+    """
+    Save a visual explanation of the Random Forest model as a JPEG image.
+
+    Parameters:
+        filename: output file path
+    """
+    formula = (
+        r"$\hat{y} = \frac{1}{T} \sum_{t=1}^{T} f_t(x)$"
+    )
+
+    explanation_lines = [
+        r"$\hat{y}$: predicted value (e.g., Ox concentration)",
+        r"$T$: total number of trees in the forest",
+        r"$f_t(x)$: prediction of tree $t$ for input $x$",
+        r"$x$: input features (e.g., NO, NO₂, U, V, longitude, latitude)",
+        "",
+        r"Each tree is trained on a bootstrap sample",
+        r"and uses a random subset of features at each split.",
+        r"Final prediction is the average of all tree outputs."
+    ]
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.axis('off')
+
+    # Title formula
+    ax.text(0, 1, formula, fontsize=18, ha='left', va='center')
+
+    # Explanation
+    y_start = 0.75
+    line_spacing = 0.07
+    for i, line in enumerate(explanation_lines):
+        ax.text(0, y_start - i * line_spacing, line,
+                fontsize=12, ha='left', va='center')
+
+    plt.tight_layout()
+
+    temp_file = "_temp_rf_formula.png"
+    fig.savefig(temp_file, dpi=300, bbox_inches='tight', pad_inches=0.2)
+    plt.close(fig)
+
+    # Convert to JPEG
+    img = Image.open(temp_file).convert("RGB")
+    img.save(filename, format="JPEG", quality=95)
+    img.close()
+    os.remove(temp_file)
+
+    print(f"✅ Saved RF formula JPEG to {filename}")
+
+###############################################################################
 
 # === CONFIG ===
 data_dir = '..\\data\\Osaka\\'
@@ -406,22 +417,22 @@ print("\n✅ Random Forest LOOCV:")
 print(f"RMSE: {rmse:.5f}, MAE: {mae:.5f}, R²: {r2:.3f}")
 
 # === LOOCV ===
-ox_rf_loocv="loocv.png"
-plot_rf_loocv_results(rmse, mae, r2, trues, preds, ox_rf_loocv)
+loocv_image="loocv.png"
+plot_loocv_results(target, rmse, mae, r2, trues, preds, loocv_image)
 
 # === Generate image ===
 bounds = compute_bounds_from_df(df, margin_ratio=0.10)
-ox_min = np.percentile(df[target], 5)
-ox_max = np.percentile(df[target], 95)
-rf_image_path = "prediction.png"
-generate_ox_rf_confidence_overlay_image(
+vmin = np.percentile(df[target], 5)
+vmax = np.percentile(df[target], 95)
+output_file = "prediction.png"
+generate_rf_confidence_overlay_image(
     df,
     bounds,
     model,
     features,
-    ox_min,
-    ox_max,
-    output_file=rf_image_path,
+    vmin,
+    vmax,
+    output_file,
     num_cells=300,
     max_distance_km=15,
     cmap_name="Reds",
@@ -434,13 +445,13 @@ center_lon = df['longitude'].mean()
 m = folium.Map(location=[center_lat, center_lon], zoom_start=10)
 image_overlay = ImageOverlay(
     name=f"Random Forest Predicted {target}",
-    image=rf_image_path,
+    image=output_file,
     bounds=[[bounds[0][0], bounds[0][1]], [bounds[1][0], bounds[1][1]]],
     opacity=0.7
 )
 image_overlay.add_to(m)
 
-html_file = "OxMapRF_LastHour.html"
+html_file = "map_one_hour_random_forest.html"
 m.save(html_file)
 print(f"Map saved to: {html_file}")
 
@@ -449,10 +460,11 @@ save_rf_formula_as_jpg(formula_image_path)
 
 labels_image_path = 'labels_image.png'
 generate_rf_image_with_labels_only(
+    target,
     df,
     bounds,
-    ox_min,
-    ox_max,
+    vmin,
+    vmax,
     model,
     scaler,
     features,
@@ -464,12 +476,23 @@ screenshot_path = "screenshot.jpg"
 capture_html_map_screenshot(html_file, screenshot_path)
 
 # === Report PDF ===
-save_map_report_pdf(
+results=[(rmse, mae, r2)]
+column_headers = ["RMSE", "MAE", "R²"]
+table_data = []
+for rmse, mae, r2 in results:
+    table_data.append([
+        f"{rmse:.5f}",
+        f"{mae:.5f}",
+        f"{r2:.3f}"
+    ])
+
+save_model_report_pdf(
     output_path="random_forest_report.pdf",
-    results=[(rmse, mae, r2, f"All stations ({year}/{month}/{day} {hour}H)")],
+    table_data=table_data,
+    column_headers=column_headers,
     formula_image_path=formula_image_path,
-    html_screenshot_path=screenshot_path,
+    map_image_path=screenshot_path,
     labels_image_path=labels_image_path,
-    additional_image_path=ox_rf_loocv,
-    title=f"Random Forest Spatial Interpolation - {year}/{month}/{day} {hour:02d}H"
+    additional_image_path=loocv_image,
+    title=f"Simple Kriging Interpolation - {year}/{month}/{day} {hour:02d}H"
 )

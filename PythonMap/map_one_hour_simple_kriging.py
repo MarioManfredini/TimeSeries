@@ -20,7 +20,7 @@ from map_utils import (
     generate_ordinary_kriging_grid,
     generate_confidence_overlay_image
 )
-from map_report import save_kriging_report_pdf, capture_html_map_screenshot, save_kriging_formula_as_jpg
+from map_report import save_model_report_pdf, capture_html_map_screenshot, save_kriging_formula_as_jpg, plot_loocv_results
 
 ###############################################################################
 def evaluate_kriging_loocv(target, df, variogram_model='linear', transform=None):
@@ -86,46 +86,6 @@ def evaluate_kriging_loocv(target, df, variogram_model='linear', transform=None)
     mae = mean_absolute_error(trues, preds)
     r2 = r2_score(trues, preds)
     return rmse, mae, r2, trues, preds
-
-###############################################################################
-def plot_kriging_loocv_results(target, rmse, mae, r2, trues, preds, output_path="kriging_loocv_plot.jpg"):
-    """
-    Generates and saves a combined plot:
-    - Top: scatter plot (true vs predicted)
-    - Bottom: line plot (true and predicted values)
-
-    Parameters:
-        trues: list or array of true measurements
-        preds: list or array of predicted measurements
-        output_path: path to save the resulting image
-    """
-    trues = np.array(trues)
-    preds = np.array(preds)
-
-    fig, axs = plt.subplots(2, 1, figsize=(6, 8), dpi=200)
-
-    # === 1. Scatter plot ===
-    axs[0].scatter(trues, preds, alpha=0.8)
-    axs[0].plot([trues.min(), trues.max()], [trues.min(), trues.max()], 'r--')
-    axs[0].set_xlabel(f"True {target}")
-    axs[0].set_ylabel(f"Predicted {target}")
-    axs[0].set_title(f"Kriging LOOCV - True vs Predicted\nRMSE={rmse:.5f}, MAE={mae:.5f}, R²={r2:.3f}")
-    axs[0].grid(True)
-    axs[0].axis("equal")
-
-    # === 2. Line plot ===
-    axs[1].plot(trues, label="True", color="black", linewidth=1.5)
-    axs[1].plot(preds, label="Predicted", color="blue", linestyle="--")
-    axs[1].set_title("True vs Predicted (Index order)")
-    axs[1].set_xlabel("Index")
-    axs[1].set_ylabel(target)
-    axs[1].grid(True)
-    axs[1].legend()
-
-    plt.tight_layout()
-    plt.savefig(output_path, bbox_inches="tight", pad_inches=0.1)
-    plt.close()
-    print(f"✅ Kriging LOOCV plot saved to: {output_path}")
 
 ###############################################################################
 def generate_kriging_image_with_labels_only(
@@ -272,8 +232,8 @@ best_transform = best[1]
 print(f"\n✅ Best model by R²: {best_model}, {best_transform} transform → RMSE={best[2]:.5f}, MAE={best[3]:.5f}, R²={best[4]:.3f}")
 
 rmse, mae, r2, trues, preds = evaluate_kriging_loocv(target, df, variogram_model=best_model, transform=best_transform)
-loocv="loocv.png"
-plot_kriging_loocv_results(target, rmse, mae, r2, trues, preds, loocv)
+loocv_image="loocv.png"
+plot_loocv_results(target, rmse, mae, r2, trues, preds, loocv_image)
 
 # === Compute bounds and color scale ===
 bounds = compute_bounds_from_df(df, margin_ratio=0.10)
@@ -344,12 +304,24 @@ generate_kriging_image_with_labels_only(
 screenshot_path = "screenshot.jpg"
 capture_html_map_screenshot(html_path, screenshot_path)
 
-save_kriging_report_pdf(
+column_headers = ["Variogram", "Transform", "RMSE", "MAE", "R²"]
+table_data = []
+for model, t_label, rmse, mae, r2 in results:
+    table_data.append([
+        f"{model}",
+        f"{t_label}",
+        f"{rmse:.5f}",
+        f"{mae:.5f}",
+        f"{r2:.3f}"
+    ])
+
+save_model_report_pdf(
     output_path="simple_kriging_report.pdf",
-    results=results,  # tuple list (model, transform, rmse, mae, r2)
+    table_data=table_data,
+    column_headers=column_headers,
     formula_image_path=formula_image_path,
-    html_screenshot_path=screenshot_path,
-    additional_image_path=loocv,
-    kriging_labels_image_path=kriging_labels_image_path,
+    map_image_path=screenshot_path,
+    labels_image_path=kriging_labels_image_path,
+    additional_image_path=loocv_image,
     title=f"Simple Kriging Interpolation - {year}/{month}/{day} {hour:02d}H"
 )

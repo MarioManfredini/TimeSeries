@@ -8,59 +8,19 @@ import os
 import pandas as pd
 import numpy as np
 import folium
+import matplotlib.pyplot as plt
+
 from folium.raster_layers import ImageOverlay
-from map_utils import (
-    load_station_temporal_features,
-    compute_bounds_from_df
-)
-from map_report import capture_html_map_screenshot, save_map_report_pdf, save_lgbm_kriging_formula_as_jpg
 from lightgbm import LGBMRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from sklearn.preprocessing import StandardScaler
 from pykrige.ok import OrdinaryKriging
 from scipy.spatial import cKDTree
+from PIL import Image
 
-###############################################################################
-def plot_rf_loocv_results(rmse, mae, r2, trues, preds, output_path="ox_rf_loocv.jpg"):
-    """
-    Generates and saves a combined plot:
-    - Top: scatter plot (true vs predicted)
-    - Bottom: line plot (true and predicted values)
-
-    Parameters:
-        trues: list or array of true Ox values
-        preds: list or array of predicted Ox values
-        output_path: path to save the resulting image
-    """
-    trues = np.array(trues)
-    preds = np.array(preds)
-
-    fig, axs = plt.subplots(2, 1, figsize=(6, 8), dpi=200)
-
-    # === 1. Scatter plot ===
-    axs[0].scatter(trues, preds, alpha=0.8)
-    axs[0].plot([trues.min(), trues.max()], [trues.min(), trues.max()], 'r--')
-    axs[0].set_xlabel("True Ox(ppm)")
-    axs[0].set_ylabel("Predicted Ox(ppm)")
-    axs[0].set_title(f"LightGBM LOOCV - True vs Predicted\nRMSE={rmse:.5f}, MAE={mae:.5f}, R²={r2:.3f}")
-    axs[0].grid(True)
-    axs[0].axis("equal")
-
-    # === 2. Line plot ===
-    axs[1].plot(trues, label="True", color="black", linewidth=1.5)
-    axs[1].plot(preds, label="Predicted", color="blue", linestyle="--")
-    axs[1].set_title("True vs Predicted (Index order)")
-    axs[1].set_xlabel("Index")
-    axs[1].set_ylabel("Ox(ppm)")
-    axs[1].grid(True)
-    axs[1].legend()
-
-    plt.tight_layout()
-    plt.savefig(output_path, bbox_inches="tight", pad_inches=0.1)
-    plt.close()
-    print(f"✅ LightGBM LOOCV plot saved to: {output_path}")
+from map_utils import load_station_temporal_features, compute_bounds_from_df
+from map_report import capture_html_map_screenshot, save_model_report_pdf, plot_loocv_results
 
 ###############################################################################
 def compute_lgbm_loocv_residuals(df, features, target='Ox(ppm)'):
@@ -115,7 +75,7 @@ def kriging_interpolate_residuals(
     bounds,
     grid_resolution=200,
     variogram_model="linear",
-    output_file="ox_kriging_of_lgbm_residuals.png"
+    output_file="kriging_of_lgbm_residuals.png"
 ):
     """
     Performs Ordinary Kriging interpolation on residuals.
@@ -172,16 +132,16 @@ def kriging_interpolate_residuals(
     print(f"✅ Kriging residual map saved to: {output_file}")
 
 ###############################################################################
-def generate_ox_combined_confidence_overlay_image(
+def generate_combined_confidence_overlay_image(
     df,
     model,
     scaler,
     features,
     residuals_df,
     bounds,
-    ox_min,
-    ox_max,
-    output_file="ox_lgbm_kriging_overlay.png",
+    vmin,
+    vmax,
+    output_file="lgbm_kriging_overlay.png",
     num_cells=300,
     max_distance_km=15,
     cmap_name="Greys",
@@ -197,7 +157,7 @@ def generate_ox_combined_confidence_overlay_image(
         features: list of model features
         residuals_df: DataFrame with 'longitude', 'latitude', 'residual'
         bounds: ((lat_min, lon_min), (lat_max, lon_max))
-        ox_min, ox_max: color scale bounds
+        vmin, vmax: color scale bounds
         output_file: path to save the image
         num_cells: number of grid cells
         max_distance_km: max distance to define confidence fade
@@ -249,7 +209,7 @@ def generate_ox_combined_confidence_overlay_image(
     combined = lgbm_preds + kriged_residuals
 
     # === Generate RGBA image with confidence
-    norm = np.clip((combined - ox_min) / (ox_max - ox_min), 0, 1)
+    norm = np.clip((combined - vmin) / (vmax - vmin), 0, 1)
     cmap = plt.get_cmap(cmap_name)
     color_img = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
 
@@ -318,22 +278,22 @@ def generate_ox_combined_confidence_overlay_image(
 def generate_lgbm_kriging_labels_image(
     df,
     bounds,
-    ox_min,
-    ox_max,
+    vmin,
+    vmax,
     lgbm_model,
     kriging_model,
     scaler,
     features,
-    output_file='ox_lgbm_kriging_labels.png',
+    output_file='lgbm_kriging_labels.png',
     num_cells=800
 ):
     """
-    Generate a grayscale image with predicted Ox values using LightGBM + Kriging residuals.
+    Generate a grayscale image with predicted values using LightGBM + Kriging residuals.
 
     Parameters:
-        df: DataFrame with required features and columns ['longitude', 'latitude', 'Ox(ppm)']
+        df: DataFrame with required features and columns ['longitude', 'latitude', measurement]
         bounds: ((lat_min, lon_min), (lat_max, lon_max))
-        ox_min, ox_max: grayscale min/max range
+        vmin, vmax: grayscale min/max range
         lgbm_model: trained LGBMRegressor
         kriging_model: trained OrdinaryKriging on residuals
         scaler: fitted scaler (StandardScaler or similar)
@@ -341,8 +301,8 @@ def generate_lgbm_kriging_labels_image(
         output_file: file path to save image
         num_cells: resolution of the grid
     """
-    if ox_min is None or ox_max is None:
-        raise ValueError("ox_min and ox_max must be provided.")
+    if vmin is None or vmax is None:
+        raise ValueError("vmin and vmax must be provided.")
 
     (lat_min, lon_min), (lat_max, lon_max) = bounds
 
@@ -411,8 +371,8 @@ def generate_lgbm_kriging_labels_image(
         extent=(lon_min, lon_max, lat_min, lat_max),
         origin='lower',
         cmap='Greys',
-        vmin=ox_min,
-        vmax=ox_max,
+        vmin=vmin,
+        vmax=vmax,
         aspect='auto'
     )
 
@@ -455,6 +415,57 @@ def generate_lgbm_kriging_labels_image(
     plt.savefig(output_file, bbox_inches='tight', pad_inches=0, transparent=True)
     plt.close()
     print(f"✅ Combined prediction label image saved to: {output_file}")
+
+###############################################################################
+def save_lgbm_kriging_formula_as_jpg(filename="formula_lgbm_kriging.jpg"):
+    """
+    Save a visual explanation of the combined LightGBM + Kriging prediction as a JPEG image.
+
+    Parameters:
+        filename: output file path
+    """
+    formula = (
+        r"$\hat{y}(x) = f_{\mathrm{LGBM}}(x) + r_{\mathrm{Kriging}}(x)$"
+    )
+
+    explanation_lines = [
+        r"$\hat{y}(x)$: final predicted value at location $x$ (e.g., Ox concentration)",
+        r"$f_{\mathrm{LGBM}}(x)$: prediction from the LightGBM model at $x$",
+        r"$r_{\mathrm{Kriging}}(x)$: interpolated residual at $x$ using Ordinary Kriging",
+        "",
+        r"Step 1: Train LightGBM with LOOCV and compute residuals",
+        r"Step 2: Fit Ordinary Kriging on residuals from training stations",
+        r"Step 3: Predict on a spatial grid and combine the two terms",
+        "",
+        r"Kriging captures spatial patterns not learned by LightGBM."
+    ]
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.axis('off')
+
+    # Title formula
+    ax.text(0, 1, formula, fontsize=20, ha='left', va='center')
+
+    # Explanation
+    y_start = 0.75
+    line_spacing = 0.07
+    for i, line in enumerate(explanation_lines):
+        ax.text(0, y_start - i * line_spacing, line,
+                fontsize=12, ha='left', va='center')
+
+    plt.tight_layout()
+
+    temp_file = "_temp_lgbm_kriging_formula.png"
+    fig.savefig(temp_file, dpi=300, bbox_inches='tight', pad_inches=0.2)
+    plt.close(fig)
+
+    # Convert to JPEG
+    img = Image.open(temp_file).convert("RGB")
+    img.save(filename, format="JPEG", quality=95)
+    img.close()
+    os.remove(temp_file)
+
+    print(f"✅ Saved LGBM + Kriging formula JPEG to {filename}")
 
 ###############################################################################
 # === CONFIG ===
@@ -508,27 +519,35 @@ print("\n✅ LightGBM LOOCV:")
 print(f"RMSE: {rmse:.5f}, MAE: {mae:.5f}, R²: {r2:.3f}")
 
 # === LOOCV ===
-ox_lgbm_loocv="loocv.png"
-plot_rf_loocv_results(rmse, mae, r2, residuals_df[target], residuals_df['prediction'], ox_lgbm_loocv)
+loocv_image="loocv.png"
+plot_loocv_results(
+    target,
+    rmse,
+    mae,
+    r2,
+    residuals_df[target],
+    residuals_df['prediction'],
+    loocv_image)
 
 # === Generate image ===
 bounds = compute_bounds_from_df(df, margin_ratio=0.10)
 
-kriging_interpolate_residuals(residuals_df, bounds)
+interpolated_residuals_image="kriging_of_lgbm_residuals.png"
+kriging_interpolate_residuals(residuals_df, bounds, output_file=interpolated_residuals_image)
 
-ox_min = np.percentile(df[target], 5)
-ox_max = np.percentile(df[target], 95)
+vmin = np.percentile(df[target], 5)
+vmax = np.percentile(df[target], 95)
 
-combined_overlay_img = "confidence_overlay_image.png"
-kriging_model = generate_ox_combined_confidence_overlay_image(
+combined_overlay_img = "prediction.png"
+kriging_model = generate_combined_confidence_overlay_image(
     df,
     lgbm_model,
     scaler,
     features,
     residuals_df,
     bounds,
-    ox_min,
-    ox_max,
+    vmin,
+    vmax,
     output_file=combined_overlay_img,
     num_cells=300,
     max_distance_km=15,
@@ -547,7 +566,7 @@ ImageOverlay(
     opacity=0.7
 ).add_to(m_combined)
 
-html_file = "OxMapLGBM_Kriging_OneHour.html"
+html_file = "map_one_hour_lgbm_kriging.html"
 m_combined.save(html_file)
 print(f"✅ Folium map saved to: {html_file}")
 
@@ -556,14 +575,14 @@ save_lgbm_kriging_formula_as_jpg(formula_image_path)
 
 labels_image_path = 'labels_image.png'
 generate_lgbm_kriging_labels_image(
-    df=df,
-    bounds=bounds,
-    ox_min=ox_min,
-    ox_max=ox_max,
-    lgbm_model=lgbm_model,
-    kriging_model=kriging_model,
-    scaler=scaler,
-    features=features,
+    df,
+    bounds,
+    vmin,
+    vmax,
+    lgbm_model,
+    kriging_model,
+    scaler,
+    features,
     output_file=labels_image_path,
     num_cells=300
 )
@@ -572,12 +591,23 @@ screenshot_path = "screenshot.jpg"
 capture_html_map_screenshot(html_file, screenshot_path)
 
 # === Report PDF ===
-save_map_report_pdf(
-    output_path="LightGBM_Kriging_Report.pdf",
-    results=[(rmse, mae, r2, f"All stations ({year}/{month}/{day} {hour}H)")],
+results=[(rmse, mae, r2)]
+column_headers = ["RMSE", "MAE", "R²"]
+table_data = []
+for rmse, mae, r2 in results:
+    table_data.append([
+        f"{rmse:.5f}",
+        f"{mae:.5f}",
+        f"{r2:.3f}"
+    ])
+
+save_model_report_pdf(
+    output_path="lgbm_kriging_report.pdf",
+    table_data=table_data,
+    column_headers=column_headers,
     formula_image_path=formula_image_path,
-    html_screenshot_path=screenshot_path,
+    map_image_path=screenshot_path,
     labels_image_path=labels_image_path,
-    additional_image_path=ox_lgbm_loocv,
-    title=f"LightGBM Interpolation + residuals Kriging - {year}/{month}/{day} {hour:02d}H"
+    additional_image_path=loocv_image,
+    title=f"LightGBM Interpolation and residuals Kriging - {year}/{month}/{day} {hour:02d}H"
 )

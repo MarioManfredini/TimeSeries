@@ -12,6 +12,7 @@ from scipy.spatial import cKDTree
 from collections import defaultdict
 from matplotlib.patches import Rectangle
 from pykrige.ok import OrdinaryKriging
+from pykrige.uk import UniversalKriging
 from datetime import datetime
 
 ###############################################################################
@@ -227,8 +228,10 @@ def load_station_temporal_features(
                 print(f"[WARN] No usable data before {datetime_target} for station {station_code}")
                 continue
 
+            station_name = row['station_name']
             feature_row = {
                 "station_code": station_code,
+                "station_name": station_name,
                 "datetime": datetime_target,
             }
 
@@ -271,8 +274,8 @@ def load_station_temporal_features(
             # Time-based features
             feature_row["hour_sin"] = np.sin(2 * np.pi * hour / 24)
             feature_row["hour_cos"] = np.cos(2 * np.pi * hour / 24)
-            feature_row["dayofweek"] = datetime_target.weekday()
-            feature_row["is_weekend"] = int(datetime_target.weekday() >= 5)
+            #feature_row["dayofweek"] = datetime_target.weekday()
+            #feature_row["is_weekend"] = int(datetime_target.weekday() >= 5)
 
             results.append(feature_row)
 
@@ -593,6 +596,72 @@ def generate_ordinary_kriging_grid(
     )
 
     z_interp, _ = ordinary_kriging.execute('grid', grid_lon, grid_lat)
+    grid = np.array(z_interp)  # shape: (lat_cells, lon_cells)
+
+    return grid
+
+###############################################################################
+def generate_universal_kriging_grid(
+    target,
+    df,
+    bounds,
+    drift_terms,
+    num_cells=300,
+    variogram_model='linear'
+):
+    """
+    Compute a 2D grid of interpolated values using Universal Kriging.
+
+    Parameters:
+        target: name of the column to interpolate (e.g., 'Ox(ppm)')
+        df: DataFrame with 'longitude', 'latitude', measurements, and external drift variables
+        bounds: ((lat_min, lon_min), (lat_max, lon_max))
+        drift_terms: list of column names to use as external drift (e.g., ['NO(ppm)', 'NO2(ppm)'])
+        num_cells: number of grid cells along the longitude axis
+        variogram_model: variogram model name (e.g. 'linear', 'power', 'gaussian')
+
+    Returns:
+        grid: interpolated grid (lat_cells x lon_cells)
+    """
+    # === Extract data ===
+    x = df['longitude'].values
+    y = df['latitude'].values
+    z = df[target].values
+    external_drift = df[drift_terms].values
+
+    (lat_min, lon_min), (lat_max, lon_max) = bounds
+
+    # === Compute grid dimensions to preserve square cells ===
+    lon_cells = num_cells
+    lat_range = lat_max - lat_min
+    lon_range = lon_max - lon_min
+    lat_cells = int(lon_cells * lat_range / lon_range)
+
+    grid_lon = np.linspace(lon_min, lon_max, lon_cells)
+    grid_lat = np.linspace(lat_min, lat_max, lat_cells)
+    grid_x, grid_y = np.meshgrid(grid_lon, grid_lat)
+
+    # === Kriging ===
+    variogram_parameters = get_variogram_parameters(variogram_model)
+
+    uk = UniversalKriging(
+        x,
+        y,
+        z,
+        variogram_model=variogram_model,
+        variogram_parameters=variogram_parameters,
+        drift_terms=drift_terms,
+        external_drift=external_drift,
+        verbose=False,
+        enable_plotting=False
+    )
+
+    z_interp, _ = uk.execute(
+        style='grid',
+        xpoints=grid_lon,
+        ypoints=grid_lat
+    )
+
     grid = np.array(z_interp)  # shape: (lat_cells, lon_cells)
 
     return grid
