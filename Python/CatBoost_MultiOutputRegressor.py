@@ -5,7 +5,7 @@ CatBoost multi-step forecasting for Ox(ppm)
 Created 2025/06/21
 @author: Mario
 """
-
+from pathlib import Path
 import pandas as pd
 import numpy as np
 import time
@@ -21,7 +21,7 @@ start_time = time.time()
 
 ###############################################################################
 # === Parameters ===
-data_dir = '..\\data\\Ehime\\'
+data_dir = Path('..') / 'data' / 'Ehime'
 prefecture_code = '38'
 station_code = '38206050'
 station_name = get_station_name(data_dir, station_code)

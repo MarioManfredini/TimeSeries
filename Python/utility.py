@@ -43,21 +43,53 @@ def load_and_prepare_data(data_dir, prefecture_code, station_code, remove_outlie
 
 ###############################################################################
 def get_station_name(data_dir, station_code):
-    csv_path = os.path.join(data_dir, 'StationId.csv')
+    """
+    Returns the station name matching the given code from Stations_Ox.csv.
+    Tries multiple encodings automatically and handles hidden spaces/BOM.
+    """
+    csv_path = os.path.join(data_dir, 'Stations_Ox.csv')
+    encodings = ['cp932', 'shift_jis', 'utf-8-sig', 'utf-8']
 
-    try:
-        df = pd.read_csv(csv_path, encoding='shift_jis', dtype=str, header=None, names=['code', 'name'])
-        match = df[df['code'] == str(station_code)]
-        if not match.empty:
-            return match.iloc[0]['name']
-        else:
+    for enc in encodings:
+        try:
+            df = pd.read_csv(
+                csv_path,
+                encoding=enc,
+                dtype=str,
+                skipinitialspace=True  # remove spaces after commas
+            )
+
+            # Remove hidden BOM and trim whitespace
+            df.columns = df.columns.str.strip().str.replace('\ufeff', '', regex=False)
+            df['station_code'] = df['station_code'].str.strip().str.replace('\ufeff', '', regex=False)
+            df['station_name'] = df['station_name'].str.strip()
+
+            if 'station_code' not in df.columns:
+                logger.warning(f"Encoding '{enc}': column 'station_code' not found → columns = {df.columns.tolist()}")
+                continue
+
+            logger.info(f"Encoding '{enc}' OK → {len(df)} rows loaded")
+
+            match = df[df['station_code'] == str(station_code)]
+            if not match.empty:
+                station_name = match.iloc[0]['station_name']
+                logger.info(f"Found station_name = {station_name}")
+                return station_name
+            else:
+                logger.warning(f"Code '{station_code}' not found in data (encoding: {enc})")
+
+        except FileNotFoundError:
+            logger.error(f"File Stations_Ox.csv not found in {data_dir}")
             return None
-    except FileNotFoundError:
-        print(f"File StationId.csv not found in {data_dir}")
-        return None
-    except Exception as e:
-        print(f"Error reading StationId.csv: {e}")
-        return None
+        except UnicodeDecodeError:
+            logger.info(f"Encoding [{enc}] failed. Try next encoding.")
+            continue
+        except Exception as e:
+            logger.error(f"Error reading Stations_Ox.csv with encoding '{enc}': {e}")
+            return None
+
+    logger.error("Unable to read Stations_Ox.csv with any known encoding.")
+    return None
 
 ###############################################################################
 def _get_csv_file_list(data_dir, prefecture_code, station_code):

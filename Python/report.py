@@ -4,52 +4,223 @@ Created 2025/05/18
 
 @author: Mario
 """
-from matplotlib.figure import Figure
-import seaborn as sns
+import os
+import platform
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import scipy.stats as stats
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
+from PIL import Image
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib import colors
+from reportlab.platypus import Table, TableStyle
 
-def save_report_to_pdf(filename, title, model_params, errors, figures):
-    from matplotlib.backends.backend_pdf import PdfPages
-    import matplotlib.pyplot as plt
+###############################################################################
+def set_japanese_font(verbose=True):
+    """
+    Japanese font finder:
+    Matplotlib, ReportLab compatibility
+    Windows, macOS, Linux compatibility
+    """
+
+    system = platform.system()
+    font_candidates = []
+
+    if system == "Darwin":  # macOS
+        font_candidates = [
+            "/System/Library/Fonts/Hiragino Kaku Gothic ProN.ttc",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/System/Library/Fonts/YuGothic-Medium.otf",
+        ]
+    elif system == "Windows":
+        font_candidates = [
+            r"C:\Windows\Fonts\YuGothM.ttc",  # Yu Gothic Medium
+            r"C:\Windows\Fonts\meiryo.ttc",
+            r"C:\Windows\Fonts\msgothic.ttc",
+        ]
+    else:  # Linux or others
+        font_candidates = [
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/takao-gothic/TakaoGothic.ttf",
+        ]
+
+    font_path = next((p for p in font_candidates if os.path.exists(p)), None)
+
+    # === Matplotlib ===
+    if font_path:
+        prop = fm.FontProperties(fname=font_path)
+        font_name = prop.get_name()
+        plt.rcParams['font.family'] = font_name
+        plt.rcParams['font.sans-serif'] = [font_name]
+        plt.rcParams['axes.unicode_minus'] = False
+
+        if verbose:
+            print(f"[INFO] Matplotlib Japanese font set to: {font_name}")
+            print(f"       Path: {font_path}")
+
+        # === ReportLab ===
+        try:
+            pdfmetrics.registerFont(TTFont(font_name, font_path))
+            if verbose:
+                print(f"[INFO] ReportLab font registered: {font_name}")
+        except Exception as e:
+            # fallback CID font
+            pdfmetrics.registerFont(UnicodeCIDFont("HeiseiMin-W3"))
+            font_name = "HeiseiMin-W3"
+            if verbose:
+                print(f"[WARNING] Could not register system font for ReportLab ({e}), using {font_name}")
+
+        return font_name
+    else:
+        # Fallback: CID universal font
+        pdfmetrics.registerFont(UnicodeCIDFont("HeiseiMin-W3"))
+        if verbose:
+            print("[WARNING] No Japanese system font found, using HeiseiMin-W3 fallback.")
+        return "HeiseiMin-W3"
+
+###############################################################################
+def save_report_to_pdf(
+        filename,
+        title,
+        formula_image_path=None,
+        comments=None,
+        params=None,
+        errors=None,
+        figures=None,
+        debug_layout=False
+):
+    # Font
+    font_name = set_japanese_font()
+    c = canvas.Canvas(filename, pagesize=A4)
+    width, height = A4
+
+    # Layout
+    margin_x = 2.0 * cm
+    margin_y = 2.0 * cm
+    col1_w = width - 2 * margin_x
+    y_cursor = height - 2.5 * cm  # punto di partenza verticale
+
+    # ======================================================
+    # First page (ReportLab)
+    # ======================================================
+
+    # Title
+    c.setFont(font_name, 22)
+    c.drawCentredString(width / 2, y_cursor, title)
+    y_cursor -= 1.2 * cm
+
+    # Formula (JPG)
+    if formula_image_path and os.path.exists(formula_image_path):
+        try:
+            img = Image.open(formula_image_path)
+            img_w, img_h = img.size
+            aspect = img_h / img_w
+            target_w = col1_w * 0.6
+            target_h = target_w * aspect
+            x_pos = (width - target_w) / 2
+            y_pos = y_cursor - target_h
+            c.drawImage(formula_image_path, x_pos, y_pos, target_w, target_h, preserveAspectRatio=True)
+            y_cursor = y_pos - 1 * cm
+        except Exception as e:
+            c.setFont(font_name, 10)
+            c.drawString(margin_x, y_cursor, f"(Error loading formula image: {e})")
+            y_cursor -= 0.8 * cm
+
+    # Comments
+    if comments:
+        c.setFont(font_name, 9)
+        text = c.beginText(margin_x, y_cursor)
+        text.textLines(comments)
+        c.drawText(text)
+        y_cursor -= len(comments.split("\n")) * 0.35 * cm
+
+    # --- Parameters table ---
+    if params:
+        y_cursor -= 0.5 * cm
+        c.setFont(font_name, 9)
+        y_cursor -= 0.6 * cm
     
-    plt.rcParams['font.family'] = 'Yu Gothic'
+        data = [[k, str(v)] for k, v in params.items()]
+        table = Table(data, colWidths=[6*cm, 8*cm], rowHeights=0.4*cm)  # smaller height
+        table.setStyle(TableStyle([
+            ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
+            ("FONTNAME", (0, 0), (-1, -1), font_name),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.grey),
+            ("BOX", (0, 0), (-1, -1), 0.25, colors.grey),
+            # Reduce padding to shrink vertical spacing
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+            ("TOPPADDING", (0, 0), (-1, -1), 1),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+        ]))
+        table.wrapOn(c, width, height)
+        table.drawOn(c, margin_x, y_cursor - len(data) * 0.4 * cm)
+        y_cursor -= len(data) * 0.4 * cm + 1 * cm
     
-    with PdfPages(filename) as pdf:
-        # Page 1: Info and parameters
-        fig, ax = plt.subplots(figsize=(8.27, 11.69))  # A4 size in inches
-        ax.axis("off")
-        
-        ax.text(0.5, 0.99, title, fontsize=18, fontweight='bold', ha='center', va='top')
-        
-        text = "Model Parameters:\n"
-        for k, v in model_params.items():
-            if isinstance(v, list):
-                text += f"\n{k}:\n"
-                for i in range(0, len(v), 5):  # n fertures per row
-                    line = ", ".join(v[i:i+5])
-                    text += f"  {line}\n"
-            else:
-                text += f"{k}: {v}\n"
+    # --- Errors table ---
+    if errors:
+        y_cursor -= 0.5 * cm
+        c.setFont(font_name, 9)
+        y_cursor -= 0.6 * cm
+    
+        data = [["Error", "Description"]] + [[f"{i+1}", err] for i, err in enumerate(errors)]
+        table = Table(data, colWidths=[1.5*cm, 12.5*cm], rowHeights=0.4*cm)  # compact rows
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+            ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
+            ("FONTNAME", (0, 0), (-1, -1), font_name),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.grey),
+            ("BOX", (0, 0), (-1, -1), 0.25, colors.grey),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+            ("TOPPADDING", (0, 0), (-1, -1), 1),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+        ]))
+        table.wrapOn(c, width, height)
+        table.drawOn(c, margin_x, y_cursor - len(data) * 0.4 * cm)
+        y_cursor -= len(data) * 0.4 * cm + 1 * cm
 
-        text += "\nMetrics per Forecast Step:\n"
-        for err in errors:
-            text += f"{err[0]} - R²: {err[1]:.4f}, MAE: {err[2]:.4f}, RMSE: {err[3]:.4f}\n"
+    # Footer
+    #c.setFont(font_name, 5)
+    #c.drawRightString(width - margin_x, margin_y, "rigth footer")
+    #c.drawString(margin_x, margin_y, "left footer")
 
-        ax.text(0.01, 0.95, text, va='top', ha='left', fontsize=8)
-        pdf.savefig(fig)
-        plt.close(fig)
+    # Debug: layout margins
+    if debug_layout:
+        c.setStrokeColorRGB(1, 0, 0)
+        c.rect(margin_x, margin_y, col1_w, height - 2 * margin_y, stroke=1, fill=0)
 
-        # Other pages: charts
+    c.showPage()
+
+    # ======================================================
+    # Other pages (Matplotlib charts)
+    # ======================================================
+    if figures:
         for fig in figures:
-            if isinstance(fig, Figure):
-                pdf.savefig(fig)
-                plt.close(fig)
-            else:
-                print("- Figure ignored because invalid:", fig)
+            fig.set_size_inches(8.3, 11.7)  # formato A4
+            fig.savefig("temp_fig.png", dpi=150, bbox_inches="tight")
+            c.drawImage("temp_fig.png", 2 * cm, 3 * cm,
+                        width - 4 * cm, height - 6 * cm,
+                        preserveAspectRatio=True)
+            c.showPage()
+        if os.path.exists("temp_fig.png"):
+            os.remove("temp_fig.png")
 
-    print(f"✅ Report saved as: {filename}")
+    c.save()
+    print(f"✅ PDF salvato in: {filename}")
 
+###############################################################################
 def plot_all_feature_importances(models, target_names, top_n=20, rows_per_page=6):
     import matplotlib.pyplot as plt
     import numpy as np
@@ -97,6 +268,7 @@ def plot_all_feature_importances(models, target_names, top_n=20, rows_per_page=6
 
     return pages
 
+###############################################################################
 def plot_error_summary_page(mae_list, rmse_list, r2_list, steps):
     import matplotlib.pyplot as plt
     import numpy as np
@@ -133,6 +305,7 @@ def plot_error_summary_page(mae_list, rmse_list, r2_list, steps):
     plt.close(fig)
     return fig
 
+###############################################################################
 def plot_feature_importance_heatmaps(model, feature_names, target_names, top_n=10):
     import matplotlib.pyplot as plt
     import pandas as pd
@@ -209,6 +382,7 @@ def plot_feature_importance_heatmaps(model, feature_names, target_names, top_n=1
     plt.close(fig)
     return fig
 
+###############################################################################
 def plot_feature_summary_pages(model,
                                feature_names,
                                target_names,
@@ -231,6 +405,7 @@ def plot_feature_summary_pages(model,
 
     return pages
 
+###############################################################################
 def plot_residuals_grid(y_true, y_pred, target_cols, targets_per_page=4):
     import matplotlib.pyplot as plt
     import seaborn as sns
@@ -285,6 +460,7 @@ def plot_residuals_grid(y_true, y_pred, target_cols, targets_per_page=4):
 
     return pages
 
+###############################################################################
 def plot_comparison_actual_predicted(y_true, y_pred, target_cols, steps, rows_per_page=3):
     import matplotlib.pyplot as plt
     import numpy as np

@@ -7,6 +7,7 @@ Created 2025/04/12
 
 import pandas as pd
 import matplotlib.pyplot as plt
+from pathlib import Path
 from statsmodels.tsa.seasonal import seasonal_decompose
 from statsmodels.tsa.stattools import adfuller
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
@@ -19,7 +20,7 @@ target_item = 'Ox(ppm)'
 # === Caricamento dati ===
 from utility import load_and_prepare_data
 
-data_dir = '..\\data\\Ehime\\'
+data_dir = Path('..') / 'data' / 'Ehime'
 prefecture_code = '38'
 station_code = '38205010'
 data, items = load_and_prepare_data(data_dir, prefecture_code, station_code)
