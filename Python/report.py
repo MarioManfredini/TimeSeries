@@ -5,19 +5,23 @@ Created 2025/05/18
 @author: Mario
 """
 import os
+import io
 import platform
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import scipy.stats as stats
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from PIL import Image
+
+from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import landscape
 from reportlab.lib.units import cm
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib import colors
 from reportlab.platypus import Table, TableStyle
 
 ###############################################################################
@@ -90,6 +94,7 @@ def save_report_to_pdf(
         formula_image_path=None,
         comments=None,
         params=None,
+        features=None,
         errors=None,
         figures=None,
         debug_layout=False
@@ -103,7 +108,8 @@ def save_report_to_pdf(
     margin_x = 2.0 * cm
     margin_y = 2.0 * cm
     col1_w = width - 2 * margin_x
-    y_cursor = height - 2.5 * cm  # punto di partenza verticale
+    y_starting_point = height - 2.5 * cm
+    y_cursor = y_starting_point
 
     # ======================================================
     # First page (ReportLab)
@@ -144,9 +150,9 @@ def save_report_to_pdf(
         y_cursor -= 0.5 * cm
         c.setFont(font_name, 9)
         y_cursor -= 0.6 * cm
-    
+
         data = [[k, str(v)] for k, v in params.items()]
-        table = Table(data, colWidths=[6*cm, 8*cm], rowHeights=0.4*cm)  # smaller height
+        table = Table(data, colWidths=[8*cm, 8*cm], rowHeights=0.4*cm)  # smaller height
         table.setStyle(TableStyle([
             ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
             ("FONTNAME", (0, 0), (-1, -1), font_name),
@@ -156,32 +162,6 @@ def save_report_to_pdf(
             ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.grey),
             ("BOX", (0, 0), (-1, -1), 0.25, colors.grey),
             # Reduce padding to shrink vertical spacing
-            ("LEFTPADDING", (0, 0), (-1, -1), 2),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-            ("TOPPADDING", (0, 0), (-1, -1), 1),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
-        ]))
-        table.wrapOn(c, width, height)
-        table.drawOn(c, margin_x, y_cursor - len(data) * 0.4 * cm)
-        y_cursor -= len(data) * 0.4 * cm + 1 * cm
-    
-    # --- Errors table ---
-    if errors:
-        y_cursor -= 0.5 * cm
-        c.setFont(font_name, 9)
-        y_cursor -= 0.6 * cm
-    
-        data = [["Error", "Description"]] + [[f"{i+1}", err] for i, err in enumerate(errors)]
-        table = Table(data, colWidths=[1.5*cm, 12.5*cm], rowHeights=0.4*cm)  # compact rows
-        table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-            ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
-            ("FONTNAME", (0, 0), (-1, -1), font_name),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.grey),
-            ("BOX", (0, 0), (-1, -1), 0.25, colors.grey),
             ("LEFTPADDING", (0, 0), (-1, -1), 2),
             ("RIGHTPADDING", (0, 0), (-1, -1), 2),
             ("TOPPADDING", (0, 0), (-1, -1), 1),
@@ -202,23 +182,123 @@ def save_report_to_pdf(
         c.rect(margin_x, margin_y, col1_w, height - 2 * margin_y, stroke=1, fill=0)
 
     c.showPage()
+    
+    if errors or features:
+        y_cursor = y_starting_point
+
+    # --- Features table ---
+    if features and len(features) > 0:
+        c.setFont(font_name, 10)
+        c.drawString(margin_x, y_cursor, "Features used for prediction")
+        y_cursor -= 0.5 * cm
+        font_size = 6
+        row_height = 0.35 * cm
+        num_cols = 5
+        col_widths = [3.5 * cm] * num_cols
+        c.setFont(font_name, font_size)
+        data = []
+        for i in range(0, len(features), num_cols):
+            row = features[i:i + num_cols]
+            # Riempie eventuali celle vuote per completare la riga
+            if len(row) < num_cols:
+                row += [""] * (num_cols - len(row))
+            data.append(row)
+        feature_table = Table(data, colWidths=col_widths, rowHeights=row_height)
+        feature_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), font_size),
+        ]))
+        feature_table.wrapOn(c, width, height)
+        feature_table.drawOn(c, margin_x, y_cursor - len(data) * row_height)
+        y_cursor -= len(data) * row_height + 1*cm
+
+    # --- Model accuracy table ---
+    if errors:
+        c.setFont(font_name, 10)
+        c.drawString(margin_x, y_cursor, "Model accuracy")
+        c.setFont(font_name, 9)
+        y_cursor -= 0.5 * cm
+        data = [["Target", "R²", "MAE", "RMSE"]] + [
+            [target, f"{r2:.4f}", f"{mae:.4f}", f"{rmse:.4f}"]
+            for target, r2, mae, rmse in errors
+        ]
+        table = Table(
+            data,
+            colWidths=[3.5*cm, 1.3*cm, 1.3*cm, 1.3*cm],
+            rowHeights=0.45*cm
+        )
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+            ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
+            ("FONTNAME", (0, 0), (-1, -1), font_name),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("ALIGN", (1, 1), (-1, -1), "RIGHT"),  # allinea numeri a destra
+            ("ALIGN", (0, 0), (0, -1), "LEFT"),    # allinea nomi target a sinistra
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.grey),
+            ("BOX", (0, 0), (-1, -1), 0.25, colors.grey),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 1),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+        ]))
+        table.wrapOn(c, width, height)
+        table.drawOn(c, margin_x, y_cursor - len(data) * 0.45 * cm)
+        y_cursor -= len(data) * 0.45 * cm + 1 * cm
+
+    if errors or features:
+        # Debug: layout margins
+        if debug_layout:
+            c.setStrokeColorRGB(1, 0, 0)
+            c.rect(margin_x, margin_y, col1_w, height - 2 * margin_y, stroke=1, fill=0)
+        c.showPage()
 
     # ======================================================
     # Other pages (Matplotlib charts)
     # ======================================================
     if figures:
-        for fig in figures:
-            fig.set_size_inches(8.3, 11.7)  # formato A4
-            fig.savefig("temp_fig.png", dpi=150, bbox_inches="tight")
-            c.drawImage("temp_fig.png", 2 * cm, 3 * cm,
-                        width - 4 * cm, height - 6 * cm,
-                        preserveAspectRatio=True)
+        a4_landscape = landscape(A4)
+        page_w, page_h = a4_landscape  # swapped dimensions
+
+        if debug_layout:
+            print(f"[DEBUG] save_report_to_pdf will render {len(figures)} figures")
+
+        for i, fig in enumerate(figures):
+            # Set landscape size
+            fig.set_size_inches(11.7, 8.3)
+
+            # Save figure to in-memory buffer
+            img_buffer = io.BytesIO()
+            fig.savefig(img_buffer, dpi=150, bbox_inches="tight", format="png")
+            img_buffer.seek(0)
+
+            # Convert buffer to ReportLab-compatible image
+            img = ImageReader(img_buffer)
+
+            # Create landscape page
+            c.setPageSize(a4_landscape)
+            c.drawImage(
+                img,
+                2 * cm, 2 * cm,
+                page_w - 4 * cm, page_h - 4 * cm,
+                preserveAspectRatio=True,
+            )
+
+            if debug_layout:
+                print(f"[DEBUG] Added figure {i+1}/{len(figures)} to PDF")
+
             c.showPage()
-        if os.path.exists("temp_fig.png"):
-            os.remove("temp_fig.png")
+
+            # Close buffer to free memory
+            img_buffer.close()
+
+        # Restore portrait orientation
+        c.setPageSize(A4)
 
     c.save()
-    print(f"✅ PDF salvato in: {filename}")
+    print(f"✅ PDF saved in: {filename}")
 
 ###############################################################################
 def plot_all_feature_importances(models, target_names, top_n=20, rows_per_page=6):
@@ -393,7 +473,7 @@ def plot_feature_summary_pages(model,
                                has_heatmap=True,
                                top_n=10):
     pages = []
-
+    
     # --------- Page 1: MAE, RMSE, R² ---------
     fig1 = plot_error_summary_page(mae_list, rmse_list, r2_list, steps)
     pages.append(fig1)
@@ -501,7 +581,7 @@ def plot_comparison_actual_predicted(y_true, y_pred, target_cols, steps, rows_pe
             residuals = y_true_i - y_pred_i
             std_res = np.std(residuals)
 
-            # --- Parte alta: Previsioni ---
+            # --- Top part: Forecasts ---
             ax_pred.plot(y_true_i, label='Actual', color='gray')
             ax_pred.plot(y_pred_i, label='Predicted', color='black', linestyle='--', linewidth=0.8)
             ax_pred.fill_between(np.arange(len(y_pred_i)),
@@ -515,7 +595,7 @@ def plot_comparison_actual_predicted(y_true, y_pred, target_cols, steps, rows_pe
             by_label = dict(zip(labels, handles))
             ax_pred.legend(by_label.values(), by_label.keys(), fontsize=5)
 
-            # --- Parte bassa: Residui ---
+            # --- Lower part: residuals ---
             ax_resid.plot(residuals, color='gray', linewidth=0.7)
             ax_resid.axhline(std_res, color='gray', linestyle='--', linewidth=0.5)
             ax_resid.axhline(-std_res, color='gray', linestyle='--', linewidth=0.5)
@@ -536,7 +616,6 @@ def plot_comparison_actual_predicted(y_true, y_pred, target_cols, steps, rows_pe
             if in_interval:
                 ax_resid.axvspan(start_idx, len(out_of_band), color='darkgrey', alpha=0.3)
 
-        # Nascondi subplot inutilizzati
         """
         total_subplots = rows_per_page * 2
         for i in range(len(sub_cols), total_subplots):
