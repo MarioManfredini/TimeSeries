@@ -1,4 +1,0 @@
-Early stopping a epoch 23. Miglior Val Loss: 0.005994
-R² (original scale): 0.783848
-MAE (original scale): 0.005473
-RMSE (original scale): 0.007264

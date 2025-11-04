@@ -3,30 +3,19 @@
     "epochs": 100,
     "batch_size": 128,
     "learning_rate": 0.001,
-    "hidden_size": 32,
+    "hidden_size": 128,
     "num_layers": 2,
-    "dropout": 0.5,
-    "patience": 3,
-    "target_item": "Ox(ppm)",
+    "dropout": 0.2,
+    "patience": 5,
     "features": [
         "Ox(ppm)",
         "Ox(ppm)_diff_1",
         "Ox(ppm)_lag1",
         "Ox(ppm)_lag2",
         "Ox(ppm)_roll_mean_3",
-        "NO(ppm)_roll_std_6",
-        "NO(ppm)_diff_3",
-        "NO(ppm)_roll_mean_3",
-        "NO2(ppm)_roll_std_6",
-        "NO2(ppm)_diff_3",
-        "NO2(ppm)_roll_mean_3",
-        "station_id"
-    ],
-    "prefecture_code": "38",
-    "station_codes": [
-        "38205010",
-        "38201020",
-        "38201090",
-        "38201530"
+        "NO(ppm)",
+        "NO2(ppm)",
+        "U",
+        "V"
     ]
 }
