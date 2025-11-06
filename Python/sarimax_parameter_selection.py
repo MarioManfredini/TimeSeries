@@ -40,7 +40,6 @@ def save_sarimax_formula_as_jpg(filename="formula_sarimax.jpg"):
     Save SARIMAX model explanation (highlighting difference from SARIMA) as a JPEG image.
     Compatible with matplotlib mathtext.
     """
-    # === Formula principale (solo parte matematica) ===
     formula_eq = (
         r"$y_t = c + \sum_{i=1}^{p}\phi_i y_{t-i}"
         r" + \sum_{I=1}^{P}\Phi_I y_{t-sI}"
@@ -49,7 +48,6 @@ def save_sarimax_formula_as_jpg(filename="formula_sarimax.jpg"):
         r" + \beta^T X_t + \varepsilon_t$"
     )
 
-    # === Testo esplicativo ===
     explanation_lines = [
         "SARIMAX model = SARIMA model extended with exogenous variables ($X_t$).",
         "",
@@ -65,15 +63,14 @@ def save_sarimax_formula_as_jpg(filename="formula_sarimax.jpg"):
         "Goal: model both temporal dynamics and the effect of external regressors.",
     ]
 
-    # === Creazione figura ===
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.axis("off")
 
-    # Titolo (solo testo normale)
+    # Title
     ax.text(0.5, 0.95, "SARIMAX Model Representation",
             fontsize=14, ha="center", va="top", fontweight="bold")
 
-    # Formula centrata
+    # formula
     ax.text(0.5, 0.78, formula_eq, fontsize=14, ha="center", va="top")
 
     # Linee esplicative
@@ -85,12 +82,12 @@ def save_sarimax_formula_as_jpg(filename="formula_sarimax.jpg"):
 
     plt.tight_layout()
 
-    # === Salvataggio temporaneo ===
+    # === Temporary PNG ===
     temp_file = "_temp_formula_sarimax.png"
     fig.savefig(temp_file, dpi=300, bbox_inches='tight', pad_inches=0)
     plt.close(fig)
 
-    # === Conversione in JPEG ===
+    # === JPEG conversion ===
     img = Image.open(temp_file).convert("RGB")
     img.save(filename, format="JPEG", quality=95)
     img.close()

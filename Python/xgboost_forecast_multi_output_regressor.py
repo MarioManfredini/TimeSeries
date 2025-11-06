@@ -258,7 +258,7 @@ errors = [
 ]
 
 # === Save PDF ===
-report_file = f'forecast_xgboost_{station_name}_{prefecture_code}_{station_code}_{target_item}.pdf'
+report_file = f'xgboost_forecast_{station_name}_{prefecture_code}_{station_code}_{target_item}.pdf'
 report_path = os.path.join("..", "reports", report_file)
 os.makedirs(os.path.dirname(report_path), exist_ok=True)
 

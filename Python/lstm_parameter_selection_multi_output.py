@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created 2025/04/12
-Converted to TensorFlow/Keras (CPU) 2025/11/03
-
+Created 2025/11/03
 @author: Mario
 """
 import numpy as np
@@ -23,13 +21,13 @@ from report import save_report_to_pdf
 ###############################################################################
 # === Parameters ===
 LAG = 24
-HORIZON = 1   # Forecast horizon (1 step ahead, can be extended later)
+HORIZON = 24   # Forecast horizon
 EPOCHS = 200
 BATCH_SIZE = 128
 LR = 0.0005
-HIDDEN_SIZE = 32 #500
-NUM_LAYERS = 1 #3
-DROPOUT = 0 #0.2
+HIDDEN_SIZE = 20
+NUM_LAYERS = 1
+DROPOUT = 0.0
 PATIENCE = 5
 
 ###############################################################################
@@ -81,10 +79,16 @@ df["dayofweek"] = df.index.dayofweek
 df["is_weekend"] = (df["dayofweek"] >= 5).astype(int)
 features += ['hour_sin', 'hour_cos', 'dayofweek', 'is_weekend']
 
-target_col = [target_item]
+###############################################################################
+# === Create Multi-step Targets ===
+# Generate future columns: Ox_t+1, Ox_t+2, ..., Ox_t+HORIZON
+for i in range(1, HORIZON + 1):
+    df[f"{target_item}_t+{i:02d}"] = df[target_item].shift(-i)
 
-# Drop missing rows
-data_model = df.dropna(subset=features + target_col).copy()
+target_cols = [f"{target_item}_t+{i:02d}" for i in range(1, HORIZON + 1)]
+
+# Drop missing rows (at the end due to shifting)
+data_model = df.dropna(subset=features + target_cols).copy()
 
 ###############################################################################
 # === Train/Test Split (80/20) ===
@@ -92,9 +96,9 @@ n_samples = len(data_model)
 train_size = int(0.8 * n_samples)
 
 X_train_raw = data_model[features].iloc[:train_size]
-y_train_raw = data_model[target_col].iloc[:train_size]
+y_train_raw = data_model[target_cols].iloc[:train_size]
 X_val_raw = data_model[features].iloc[train_size:]
-y_val_raw = data_model[target_col].iloc[train_size:]
+y_val_raw = data_model[target_cols].iloc[train_size:]
 
 ###############################################################################
 # === Normalization (fit only on training data) ===
@@ -103,17 +107,17 @@ scaler_y = MinMaxScaler().fit(y_train_raw)
 
 X_train = pd.DataFrame(scaler_X.transform(X_train_raw), columns=features)
 X_val = pd.DataFrame(scaler_X.transform(X_val_raw), columns=features)
-y_train = pd.DataFrame(scaler_y.transform(y_train_raw), columns=target_col)
-y_val = pd.DataFrame(scaler_y.transform(y_val_raw), columns=target_col)
+y_train = pd.DataFrame(scaler_y.transform(y_train_raw), columns=target_cols)
+y_val = pd.DataFrame(scaler_y.transform(y_val_raw), columns=target_cols)
 
 ###############################################################################
 # === Sequence Creation ===
-def create_sequences(X: pd.DataFrame, y: pd.Series, lag: int):
-    """Create sequences of length `lag` for LSTM input."""
+def create_sequences(X: pd.DataFrame, y: pd.DataFrame, lag: int):
+    """Create sequences of length `lag` for LSTM input and multi-step y."""
     Xs, ys = [], []
     for i in range(len(X) - lag):
         Xs.append(X.iloc[i:i+lag].values)
-        ys.append(y.iloc[i+lag])
+        ys.append(y.iloc[i+lag].values)  # Multi-step targets
     return np.array(Xs), np.array(ys)
 
 X_train_seq, y_train_seq = create_sequences(X_train, y_train, LAG)
@@ -131,8 +135,8 @@ val_ds = tf.data.Dataset.from_tensor_slices((X_val_seq, y_val_seq)).batch(BATCH_
 
 ###############################################################################
 # === LSTM Model Definition ===
-def build_lstm_model(input_shape, hidden_size, num_layers, dropout):
-    """Build a multi-layer LSTM model."""
+def build_lstm_model(input_shape, hidden_size, num_layers, dropout, output_size):
+    """Build a multi-layer LSTM model with dynamic output size."""
     model = Sequential()
     for i in range(num_layers):
         is_last = (i == num_layers - 1)
@@ -147,17 +151,17 @@ def build_lstm_model(input_shape, hidden_size, num_layers, dropout):
                            return_sequences=not is_last,
                            dropout=dropout,
                            recurrent_dropout=0.0))
-    model.add(Dense(1))
+    model.add(Dense(output_size))
     return model
 
 input_shape = (X_train_seq.shape[1], X_train_seq.shape[2])
-model = build_lstm_model(input_shape, HIDDEN_SIZE, NUM_LAYERS, DROPOUT)
+model = build_lstm_model(input_shape, HIDDEN_SIZE, NUM_LAYERS, DROPOUT, HORIZON)
 model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=LR), loss='mse')
 model.summary()
 
 ###############################################################################
 # === Save Parameters ===
-PARAMS_PATH = "lstm_best_params.json"
+PARAMS_PATH = "lstm_best_params_multi_output.json"
 params = {
     "lag": LAG,
     "horizon": HORIZON,
@@ -174,15 +178,14 @@ with open(PARAMS_PATH, "w", encoding="utf-8") as f:
     json.dump(params, f, indent=4, ensure_ascii=False)
 print(f"✅ Saved parameters to {PARAMS_PATH}")
 
-# === Save Features ===
-FEATURES_PATH = "lstm_features_used.json"
+FEATURES_PATH = "lstm_features_used_multi_output.json"
 with open(FEATURES_PATH, "w", encoding="utf-8") as f:
     json.dump(features, f, indent=4, ensure_ascii=False)
 print(f"✅ Saved features list to {FEATURES_PATH}")
 
 ###############################################################################
-# === Callbacks (EarlyStopping + ModelCheckpoint) ===
-MODEL_PATH = "lstm_best_model.keras"
+# === Callbacks ===
+MODEL_PATH = "lstm_best_model_multi_output.keras"
 checkpoint_cb = ModelCheckpoint(MODEL_PATH, monitor='val_loss', mode='min',
                                 save_best_only=True, save_weights_only=False, verbose=1)
 earlystop_cb = EarlyStopping(monitor='val_loss', patience=PATIENCE,
@@ -205,30 +208,32 @@ best_model = load_model(MODEL_PATH)
 
 ###############################################################################
 # === Forecast on Validation Set ===
-y_pred_scaled = best_model.predict(X_val_seq).flatten()
-y_true_scaled = y_val_seq.flatten()
+y_pred_scaled = best_model.predict(X_val_seq)
+y_true_scaled = y_val_seq
 
-# Inverse transform only the target variable
-y_pred_inv = scaler_y.inverse_transform(y_pred_scaled.reshape(-1, 1)).flatten()
-y_true_inv = scaler_y.inverse_transform(y_true_scaled.reshape(-1, 1)).flatten()
+# Inverse transform all target steps
+y_pred_inv = scaler_y.inverse_transform(y_pred_scaled)
+y_true_inv = scaler_y.inverse_transform(y_true_scaled)
+
+# Evaluate only the first horizon step (t+1) for comparability
+r2 = r2_score(y_true_inv[:, 0], y_pred_inv[:, 0])
+mae = mean_absolute_error(y_true_inv[:, 0], y_pred_inv[:, 0])
+rmse = np.sqrt(mean_squared_error(y_true_inv[:, 0], y_pred_inv[:, 0]))
+
+print(f"R² (t+1): {r2:.6f}")
+print(f"MAE (t+1): {mae:.6f}")
+print(f"RMSE (t+1): {rmse:.6f}")
+
+with open("lstm_best_result_multi_output.txt", "w", encoding="utf-8") as f:
+    f.write(f"R² (t+1): {r2:.6f}\n")
+    f.write(f"MAE (t+1): {mae:.6f}\n")
+    f.write(f"RMSE (t+1): {rmse:.6f}\n")
 
 ###############################################################################
-# === Evaluation Metrics ===
-r2 = r2_score(y_true_inv, y_pred_inv)
-mae = mean_absolute_error(y_true_inv, y_pred_inv)
-rmse = np.sqrt(mean_squared_error(y_true_inv, y_pred_inv))
+# === Report Generation ===
+# Residuals and figures are based only on the first horizon (t+1)
 
-print(f"R² (original scale): {r2:.6f}")
-print(f"MAE (original scale): {mae:.6f}")
-print(f"RMSE (original scale): {rmse:.6f}")
-
-with open("lstm_best_result.txt", "w", encoding="utf-8") as f:
-    f.write(f"R² (original scale): {r2:.6f}\n")
-    f.write(f"MAE (original scale): {mae:.6f}\n")
-    f.write(f"RMSE (original scale): {rmse:.6f}\n")
-
-###############################################################################
-# === Save Figures for Report ===
+# === Save Figures ===
 figures = []
 
 # Learning Curve
@@ -294,7 +299,7 @@ plt.show()
 # === Save Report to PDF ===
 import os
 
-report_file = f'lstm_parameter_selection_{station_name}_{prefecture_code}_{station_code}_{target_item}.pdf'
+report_file = f'lstm_parameter_selection_multi_output_{station_name}_{prefecture_code}_{station_code}_{target_item}.pdf'
 report_path = os.path.join("..", "reports", report_file)
 os.makedirs(os.path.dirname(report_path), exist_ok=True)
 

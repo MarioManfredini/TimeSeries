@@ -15,7 +15,6 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.preprocessing import MinMaxScaler
 from xgboost import XGBRegressor
 from statsmodels.stats.diagnostic import acorr_ljungbox
-from scipy.stats import mode, skew, kurtosis
 
 from utility import load_and_prepare_data, get_station_name
 from report import save_report_to_pdf
@@ -79,21 +78,24 @@ target_col = [target_item]
 data_model = df.dropna(subset=features + target_col).copy()
 
 ###############################################################################
-# === Normalization ===
-scaler_X = MinMaxScaler()
-scaler_y = MinMaxScaler()
+# === Train/Test Split (80/20) ===
+n_samples = len(data_model)
+train_size = int(0.8 * n_samples)
 
-X_array = scaler_X.fit_transform(data_model[features])
-y_array = scaler_y.fit_transform(data_model[target_col])
-
-X = pd.DataFrame(X_array, columns=features)
-y = pd.DataFrame(y_array, columns=target_col)
+X_train_raw = data_model[features].iloc[:train_size]
+y_train_raw = data_model[target_col].iloc[:train_size]
+X_val_raw = data_model[features].iloc[train_size:]
+y_val_raw = data_model[target_col].iloc[train_size:]
 
 ###############################################################################
-# === Train/Test Split ===
-split_index = int(len(X) * 0.7)
-X_train, X_test = X.iloc[:split_index], X.iloc[split_index:]
-y_train, y_test = y.iloc[:split_index], y.iloc[split_index:]
+# === Normalization (fit only on training data) ===
+scaler_X = MinMaxScaler().fit(X_train_raw)
+scaler_y = MinMaxScaler().fit(y_train_raw)
+
+X_train = pd.DataFrame(scaler_X.transform(X_train_raw), columns=features)
+X_val = pd.DataFrame(scaler_X.transform(X_val_raw), columns=features)
+y_train = pd.DataFrame(scaler_y.transform(y_train_raw), columns=target_col)
+y_val = pd.DataFrame(scaler_y.transform(y_val_raw), columns=target_col)
 
 ###############################################################################
 # Basic model definition
@@ -101,9 +103,9 @@ xgb_model = XGBRegressor(objective='reg:squarederror', random_state=42)
 
 # parameters grid definition
 param_grid = {
-    'n_estimators': [900, 1000, 1100],
+    'n_estimators': [1100, 1200, 1300],
     'max_depth': [4, 5, 6],
-    'learning_rate': [0.04, 0.045, 0.05],
+    'learning_rate': [0.02, 0.03, 0.04],
 }
 
 # GridSearchCV configuration
@@ -125,13 +127,13 @@ print(grid_search.best_params_)
 
 # Evaluation on the test set
 best_model = grid_search.best_estimator_
-y_pred = best_model.predict(X_test)
+y_pred = best_model.predict(X_val)
 
 ###############################################################################
 # Calculating metrics
-r2 = r2_score(y_test, y_pred)
-mae = mean_absolute_error(y_test, y_pred)
-mse = mean_squared_error(y_test, y_pred)
+r2 = r2_score(y_val, y_pred)
+mae = mean_absolute_error(y_val, y_pred)
+mse = mean_squared_error(y_val, y_pred)
 rmse = np.sqrt(mse)
 
 print(f"R²: {r2:.5f}")
@@ -140,21 +142,19 @@ print(f"MSE: {mse:.5f}")
 print(f"RMSE: {rmse:.5f}")
 
 # Residual Errors
-residuals = (y_test.values.flatten() - y_pred.flatten())
+residuals = (y_val.values.flatten() - y_pred.flatten())
 
 # Compute statistics
 res_mean = np.mean(residuals)
 res_median = np.median(residuals)
-res_mode = float(mode(residuals, nan_policy='omit').mode)
+# Estimate mode using histogram (most frequent bin center)
+hist_counts, bin_edges = np.histogram(residuals, bins=50)
+mode_index = np.argmax(hist_counts)
+res_mode = (bin_edges[mode_index] + bin_edges[mode_index + 1]) / 2
 
 # Ljung-Box residuals autocorrelation test
 lb_test = acorr_ljungbox(residuals, lags=[1], return_df=True)
 prob_Q = lb_test["lb_pvalue"].iloc[0] if not lb_test.empty else np.nan
-
-# residuals skewness
-skewness = skew(residuals)
-# residuals kurtosis
-kurt = kurtosis(residuals, fisher=False)  # False → kurtosis "classic" (3 = normal)
 
 ###############################################################################
 # === Save Figures for Report ===
@@ -162,7 +162,7 @@ figures = []
 
 # Predicted vs Real
 fig1, ax1 = plt.subplots(figsize=(10, 4))
-ax1.plot(y_test.values[-720:], label='Real values', color='gray')
+ax1.plot(y_val.values[-720:], label='Real values', color='gray')
 ax1.plot(y_pred[-720:], label='XGBoost (with lag)', color='lightgray', linestyle='dashed')
 ax1.set_title(f'Regression with lag\nR²: {r2:.5f}')
 ax1.set_xlabel('Samples')
@@ -173,7 +173,7 @@ fig1.tight_layout()
 figures.append(fig1)
 
 # Residual Errors
-residuals = (y_test.values.flatten() - y_pred.flatten())
+residuals = (y_val.values.flatten() - y_pred.flatten())
 fig2, ax2 = plt.subplots(figsize=(8, 4))
 ax2.scatter(range(len(residuals)), residuals, cmap='Greys', alpha=0.5, s=10, color='gray')
 ax2.axhline(0, color='gray', linestyle='--')
@@ -233,7 +233,7 @@ params_info = {
     "Station name": station_name,
     "Target item": target_item,
     "Number of data points in the train set": len(y_train),
-    "Number of data points in the test set": len(y_test),
+    "Number of data points in the test set": len(y_val),
     "Number of features used": len(features),
     "Model": "XGBoost",
     "Objective": xgb_model.get_params()['objective'],
@@ -247,11 +247,11 @@ for key, value in grid_search.best_params_.items():
     params_info[f"Best Parameter (found) {key}"] = str(value)
 params_info["Predictions mean"] = np.mean(y_pred)
 params_info["Predictions std"] = np.std(y_pred)
-params_info["Real mean"] = np.mean(y_test.values)
-params_info["Real std"] = np.std(y_test.values)
+params_info["Real mean"] = np.mean(y_val.values)
+params_info["Real std"] = np.std(y_val.values)
 params_info["Ljung-Box residuals autocorrelation, Prob(Q)"] = prob_Q
-params_info["Residuals skew"] = skewness
-params_info["Residuals kurtosis"] = kurt
+params_info["Residuals skew"] = float(f"{pd.Series(residuals).skew():.3f}")
+params_info["Residuals kurtosis"] = float(f"{pd.Series(residuals).kurtosis():.3f}")
 
 errors = [
     (target_item, r2, mae, rmse)
