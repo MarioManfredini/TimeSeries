@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Created 2025/11/03
-LSTM 24-hour multi-step forecasting and report generation
+Created 2025/11/08
+RNN 24-hour multi-step forecasting and report generation
 Author: Mario
 """
 import os
@@ -30,69 +30,52 @@ prefecture_code = '38'
 station_code = '38206050'
 station_name = get_station_name(data_dir, station_code)
 target_item = 'Ox(ppm)'
-MODEL_PATH = "lstm_best_model_multi_output.keras"
-PARAMS_PATH = "lstm_best_params_multi_output.json"
-FEATURES_PATH = "lstm_features_used_multi_output.json"
+MODEL_PATH = "rnn_best_model_multi_output.keras"
+PARAMS_PATH = "rnn_best_params_multi_output.json"
+FEATURES_PATH = "rnn_features_used_multi_output.json"
 
 ###############################################################################
-def save_lstm_formula_as_jpg(filename="formula_lstm.jpg"):
+def save_rnn_formula_as_jpg(filename="formula_rnn.jpg"):
     """
-    Save LSTM model formula and cost function as a JPEG image with explanation.
+    Save RNN model formula and cost function as a JPEG image with explanation.
     """
-    # --- LSTM main equations (using only matplotlib-compatible LaTeX) ---
     formula_eq = (
-        r"$i_t = \sigma(W_i x_t + U_i h_{t-1} + b_i)$" "\n"
-        r"$f_t = \sigma(W_f x_t + U_f h_{t-1} + b_f)$" "\n"
-        r"$o_t = \sigma(W_o x_t + U_o h_{t-1} + b_o)$" "\n"
-        r"$\tilde{c}_t = \tanh(W_c x_t + U_c h_{t-1} + b_c)$" "\n"
-        r"$c_t = f_t \odot c_{t-1} + i_t \odot \tilde{c}_t$" "\n"
-        r"$h_t = o_t \odot \tanh(c_t)$" "\n"
-        r"$\hat{y}_t = W_y h_t + b_y$"
-    )
-
-    # --- Cost function ---
-    formula_cost = (
+        r"$h_t = \sigma(W_h x_t + U_h h_{t-1} + b_h)$" "\n"
+        r"$\hat{y}_t = W_y h_t + b_y$" "\n"
         r"$\mathcal{L} = \frac{1}{N} \sum_{t=1}^{N} (y_t - \hat{y}_t)^2$"
     )
 
-    # --- Explanation text ---
     explanation_lines = [
-        r"$i_t, f_t, o_t$: input, forget and output gates controlling memory flow",
-        r"$c_t$: cell state storing long-term information",
-        r"$h_t$: hidden state passed to the next time step",
-        r"$\sigma$: sigmoid activation function",
-        r"$\tanh$: hyperbolic tangent activation for non-linearity",
+        r"$x_t$: input vector at time $t$",
+        r"$h_t$: hidden state containing temporal information",
+        r"$W_h, U_h, b_h$: learnable parameters of the recurrent layer",
+        r"$\sigma$: non-linear activation function (usually tanh or ReLU)",
+        r"$\hat{y}_t$: predicted output for step $t$",
         r"$\mathcal{L}$: mean squared error minimized during training",
     ]
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots(figsize=(8, 4))
     ax.axis("off")
 
-    # Draw equations
-    ax.text(0, 1, formula_eq, fontsize=16, ha="left", va="top", linespacing=1.5)
-    ax.text(0, 0.5, formula_cost, fontsize=18, ha="left", va="top")
+    ax.text(0, 1, formula_eq, fontsize=18, ha="left", va="top", linespacing=1.6)
 
-    # Draw explanation lines
-    y_start = 0.25
-    line_spacing = 0.07
+    y_start = 0.4
+    line_spacing = 0.06
     for i, line in enumerate(explanation_lines):
         ax.text(0, y_start - i * line_spacing, line,
                 fontsize=11, ha="left", va="top")
 
     plt.tight_layout()
-
-    # Save as temporary PNG
-    temp_file = "_temp_formula_lstm.png"
+    temp_file = "_temp_formula_rnn.png"
     fig.savefig(temp_file, dpi=300, bbox_inches='tight', pad_inches=0)
     plt.close(fig)
 
-    # Convert to JPEG
     img = Image.open(temp_file).convert("RGB")
     img.save(filename, format="JPEG", quality=95)
     img.close()
     os.remove(temp_file)
 
-    print(f"✅ Saved LSTM formula image as {filename}")
+    print(f"✅ Saved RNN formula image as {filename}")
 
 ###############################################################################
 # === Load Data ===
@@ -185,7 +168,7 @@ X_test = X_test.values.reshape((X_test.shape[0], 1, X_test.shape[1]))
 ###############################################################################
 # === Load Best Model ===
 model = load_model(MODEL_PATH)
-print(f"✅ Loaded trained LSTM model from {MODEL_PATH}")
+print(f"✅ Loaded trained RNN model from {MODEL_PATH}")
 
 ###############################################################################
 # === Forecast ===
@@ -222,8 +205,8 @@ figures = []
 # Predicted vs True (flattened for visualization)
 fig1, ax1 = plt.subplots(figsize=(10, 4))
 ax1.plot(y_true.flatten()[-720:], label='True values', color='gray')
-ax1.plot(y_pred.flatten()[-720:], label='LSTM forecast', color='lightgray', linestyle='dashed')
-ax1.set_title(f"LSTM Multi-step Forecast (24h)\nR² (avg): {np.mean(r2_list):.5f}")
+ax1.plot(y_pred.flatten()[-720:], label='RNN forecast', color='lightgray', linestyle='dashed')
+ax1.set_title(f"RNN Multi-step Forecast (24h)\nR² (avg): {np.mean(r2_list):.5f}")
 ax1.set_xlabel("Samples")
 ax1.set_ylabel(target_item)
 ax1.legend()
@@ -267,19 +250,17 @@ end_time = time.time()
 elapsed_time = end_time - start_time
 elapsed_str = f"{int(elapsed_time//60)} min {int(elapsed_time%60)} sec"
 
-# Save formula as image
-formula_path = os.path.join("..", "reports", "formula_lstm.jpg")
-save_lstm_formula_as_jpg(filename=formula_path)
+formula_path = os.path.join("..", "reports", "formula_rnn.jpg")
+save_rnn_formula_as_jpg(filename=formula_path)
 
 explanation = (
-    "The LSTM (Long Short-Term Memory) model is a type of recurrent neural network (RNN)\n"
-    "designed to learn temporal dependencies in sequential data. It introduces a memory cell\n"
-    "that can preserve information across long time intervals through a system of gates:\n\n"
-    "1. The **input gate** decides how much new information enters the memory cell.\n"
-    "2. The **forget gate** controls what information should be discarded from the cell state.\n"
-    "3. The **output gate** determines how much of the internal memory contributes to the output.\n\n"
-    "This gating mechanism allows the LSTM to model both short-term and long-term dependencies.\n"
-    "During training, the model minimizes the mean squared error between predicted and actual values."
+    "The Recurrent Neural Network (RNN) is designed to handle sequential data,\n"
+    "where each output depends not only on the current input but also on the previous hidden state.\n\n"
+    "At each time step, the hidden layer combines the current input x_t and the previous hidden state h_(t-1),\n"
+    "allowing the model to retain temporal information across steps.\n\n"
+    "The RNN is simpler than LSTM because it lacks explicit memory cells and gates.\n"
+    "This makes it more sensitive to vanishing gradient problems but still effective for short-term dependencies.\n\n"
+    "The model is trained by minimizing the mean squared error between predicted and observed values."
 )
 
 params_info = {
@@ -290,7 +271,7 @@ params_info = {
     "Number of data points in the train set": len(y_train),
     "Number of data points in the test set": len(y_test),
     "Forecast horizon (hours)": FORECAST_HORIZON,
-    "Model": "LSTM",
+    "Model": "RNN",
     "Elapsed time": elapsed_str,
     "Number of features used": len(features),
     "Residuals mean": float(f"{res_mean:.6f}"),
@@ -305,13 +286,13 @@ errors = [
 
 ###############################################################################
 # === Save Report ===
-report_file = f"lstm_forecast_{station_name}_{prefecture_code}_{station_code}_{target_item}.pdf"
+report_file = f"rnn_forecast_{station_name}_{prefecture_code}_{station_code}_{target_item}.pdf"
 report_path = os.path.join("..", "reports", report_file)
 os.makedirs(os.path.dirname(report_path), exist_ok=True)
 
 save_report_to_pdf(
     filename=report_path,
-    title=f"LSTM 24-hour Forecast Report - {station_name}",
+    title=f"RNN 24-hour Forecast Report - {station_name}",
     formula_image_path=formula_path,
     comments=explanation,
     params=params_info,

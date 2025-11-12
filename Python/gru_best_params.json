@@ -1,0 +1,39 @@
+{
+    "lag": 24,
+    "epochs": 200,
+    "batch_size": 128,
+    "learning_rate": 0.0005,
+    "hidden_units": [
+        128,
+        64
+    ],
+    "dropout": 0.1,
+    "patience": 10,
+    "features": [
+        "NO(ppm)",
+        "NO2(ppm)",
+        "U",
+        "V",
+        "Ox(ppm)_roll_mean_3",
+        "Ox(ppm)_roll_std_6",
+        "NO(ppm)_roll_mean_3",
+        "NO(ppm)_roll_std_6",
+        "NO2(ppm)_roll_mean_3",
+        "NO2(ppm)_roll_std_6",
+        "U_roll_mean_3",
+        "U_roll_std_6",
+        "V_roll_mean_3",
+        "V_roll_std_6",
+        "Ox(ppm)_diff_1",
+        "Ox(ppm)_diff_2",
+        "Ox(ppm)_diff_3",
+        "NO(ppm)_diff_3",
+        "NO2(ppm)_diff_3",
+        "U_diff_3",
+        "V_diff_3",
+        "hour_sin",
+        "hour_cos",
+        "dayofweek",
+        "is_weekend"
+    ]
+}

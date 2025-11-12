@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Created 2025/11/03
-@author: Mario
+Created 2025/11/08
+Author: Mario
+Description:
+Multi-step (24-hour horizon) forecasting of Ox(ppm) using SimpleRNN.
 """
 import os
 import numpy as np
@@ -13,7 +15,7 @@ from pathlib import Path
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import LSTM, Dense
+from tensorflow.keras.layers import SimpleRNN, Dense
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 
 from utility import get_station_name, load_and_prepare_data
@@ -29,7 +31,7 @@ LR = 0.0005
 HIDDEN_SIZE = 20
 NUM_LAYERS = 1
 DROPOUT = 0.0
-PATIENCE = 5
+PATIENCE = 8
 
 ###############################################################################
 # === Configuration ===
@@ -38,9 +40,9 @@ prefecture_code = '38'
 station_code = '38206050'
 station_name = get_station_name(data_dir, station_code)
 target_item = 'Ox(ppm)'
-PARAMS_PATH = "lstm_best_params_multi_output.json"
-FEATURES_PATH = "lstm_features_used_multi_output.json"
-MODEL_PATH = "lstm_best_model_multi_output.keras"
+MODEL_PATH = "rnn_best_model_multi_output.keras"
+PARAMS_PATH = "rnn_best_params_multi_output.json"
+FEATURES_PATH = "rnn_features_used_multi_output.json"
 
 ###############################################################################
 # === Load Data ===
@@ -117,7 +119,7 @@ y_val = pd.DataFrame(scaler_y.transform(y_val_raw), columns=target_cols)
 ###############################################################################
 # === Sequence Creation ===
 def create_sequences(X: pd.DataFrame, y: pd.DataFrame, lag: int):
-    """Create sequences of length `lag` for LSTM input and multi-step y."""
+    """Create sequences of length `lag` for RNN input and multi-step output."""
     Xs, ys = [], []
     for i in range(len(X) - lag):
         Xs.append(X.iloc[i:i+lag].values)
@@ -138,28 +140,28 @@ train_ds = tf.data.Dataset.from_tensor_slices((X_train_seq, y_train_seq)).batch(
 val_ds = tf.data.Dataset.from_tensor_slices((X_val_seq, y_val_seq)).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
 
 ###############################################################################
-# === LSTM Model Definition ===
-def build_lstm_model(input_shape, hidden_size, num_layers, dropout, output_size):
-    """Build a multi-layer LSTM model with dynamic output size."""
+# === RNN Model Definition ===
+def build_rnn_model(input_shape, hidden_size, num_layers, dropout, output_size):
+    """Build a SimpleRNN model for multi-step forecasting."""
     model = Sequential()
     for i in range(num_layers):
         is_last = (i == num_layers - 1)
         if i == 0:
-            model.add(LSTM(hidden_size,
-                           return_sequences=not is_last,
-                           dropout=dropout,
-                           recurrent_dropout=0.0,
-                           input_shape=input_shape))
+            model.add(SimpleRNN(hidden_size,
+                                return_sequences=not is_last,
+                                dropout=dropout,
+                                recurrent_dropout=0.0,
+                                input_shape=input_shape))
         else:
-            model.add(LSTM(hidden_size,
-                           return_sequences=not is_last,
-                           dropout=dropout,
-                           recurrent_dropout=0.0))
+            model.add(SimpleRNN(hidden_size,
+                                return_sequences=not is_last,
+                                dropout=dropout,
+                                recurrent_dropout=0.0))
     model.add(Dense(output_size))
     return model
 
 input_shape = (X_train_seq.shape[1], X_train_seq.shape[2])
-model = build_lstm_model(input_shape, HIDDEN_SIZE, NUM_LAYERS, DROPOUT, HORIZON)
+model = build_rnn_model(input_shape, HIDDEN_SIZE, NUM_LAYERS, DROPOUT, HORIZON)
 model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=LR), loss='mse')
 model.summary()
 
@@ -225,7 +227,7 @@ print(f"R² (t+1): {r2:.6f}")
 print(f"MAE (t+1): {mae:.6f}")
 print(f"RMSE (t+1): {rmse:.6f}")
 
-with open("lstm_best_result_multi_output.txt", "w", encoding="utf-8") as f:
+with open("rnn_best_result_multi_output.txt", "w", encoding="utf-8") as f:
     f.write(f"R² (t+1): {r2:.6f}\n")
     f.write(f"MAE (t+1): {mae:.6f}\n")
     f.write(f"RMSE (t+1): {rmse:.6f}\n")
@@ -241,7 +243,7 @@ figures = []
 fig1, ax1 = plt.subplots(figsize=(10, 4))
 ax1.plot(range(1, len(train_losses) + 1), train_losses, label='Training Loss', color='gray')
 ax1.plot(range(1, len(val_losses) + 1), val_losses, label='Validation Loss', color='lightgray', linestyle='dashed')
-ax1.set_title(f'Learning Curve (LSTM)\nBest Validation Loss: {min(val_losses):.5f}')
+ax1.set_title(f'Learning Curve (SimpleRNN)\nBest Validation Loss: {min(val_losses):.5f}')
 ax1.set_xlabel('Epoch')
 ax1.set_ylabel('Loss (MSE)')
 ax1.legend()
@@ -252,8 +254,8 @@ figures.append(fig1)
 # Predicted vs Real
 fig2, ax2 = plt.subplots(figsize=(10, 4))
 ax2.plot(y_true_inv[-720:], label='True values', color='gray')
-ax2.plot(y_pred_inv[-720:], label='LSTM (with lag)', color='lightgray', linestyle='dashed')
-ax2.set_title(f'LSTM Regression with lag\nR²: {r2:.5f}')
+ax2.plot(y_pred_inv[-720:], label='RNN (with lag)', color='lightgray', linestyle='dashed')
+ax2.set_title(f'SimpleRNN Regression\nR²: {r2:.5f}')
 ax2.set_xlabel('Samples')
 ax2.set_ylabel(target_item)
 ax2.legend()
@@ -298,7 +300,7 @@ plt.show()
 
 ###############################################################################
 # === Save Report to PDF ===
-report_file = f'lstm_parameter_selection_multi_output_{station_name}_{prefecture_code}_{station_code}_{target_item}.pdf'
+report_file = f'rnn_parameter_selection_multi_output_{station_name}_{prefecture_code}_{station_code}_{target_item}.pdf'
 report_path = os.path.join("..", "reports", report_file)
 os.makedirs(os.path.dirname(report_path), exist_ok=True)
 
@@ -310,7 +312,7 @@ params_info = {
     "Number of data points in the train set": len(y_train),
     "Number of data points in the validation set": len(y_val),
     "Number of features": len(features),
-    "Model": "LSTM",
+    "Model": "SimpleRNN",
     "Lag (sequence length)": LAG,
     "Epochs": EPOCHS,
     "Batch size": BATCH_SIZE,
@@ -344,7 +346,7 @@ errors = [
 
 save_report_to_pdf(
     filename=report_path,
-    title=f"LSTM parameter selection Report - {station_name}",
+    title=f"RNN parameter selection Report - {station_name}",
     params=params_info,
     features=features,
     errors=errors,
