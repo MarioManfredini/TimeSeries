@@ -17,7 +17,7 @@ from pathlib import Path
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import GRU, Dense, Dropout
+from tensorflow.keras.layers import Input, GRU, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 
 from utility import get_station_name, load_and_prepare_data
@@ -44,6 +44,7 @@ target_item = 'Ox(ppm)'
 
 MODEL_PATH = "gru_best_model_multi_output.keras"
 PARAMS_PATH = "gru_best_params_multi_output.json"
+FEATURES_PATH = "gru_features_used_multi_output.json"
 
 ###############################################################################
 # === Load Data ===
@@ -83,12 +84,12 @@ df = df.dropna(subset=features + target_cols)
 
 ###############################################################################
 # === Create Sequences for GRU ===
-def create_sequences(data, target, lag):
-    """Convert dataframe to 3D array (samples, timesteps, features) for GRU."""
+def create_sequences(data, target, lag, horizon):
+    """Convert dataframe to 3D array (samples, timesteps, features) for GRU multi-output."""
     X, y = [], []
-    for i in range(len(data) - lag - HORIZON + 1):
+    for i in range(len(data) - lag - horizon + 1):
         X.append(data.iloc[i:i+lag].values)
-        y.append(target.iloc[i+lag:i+lag+HORIZON].values.flatten())
+        y.append(target.iloc[i+lag].values)
     return np.array(X), np.array(y)
 
 scaler_X = MinMaxScaler()
@@ -97,9 +98,12 @@ scaler_y = MinMaxScaler()
 X_scaled = scaler_X.fit_transform(df[features])
 y_scaled = scaler_y.fit_transform(df[target_cols])
 
-X_seq, y_seq = create_sequences(pd.DataFrame(X_scaled, columns=features),
-                                pd.DataFrame(y_scaled, columns=target_cols),
-                                LAG)
+X_seq, y_seq = create_sequences(
+    pd.DataFrame(X_scaled, columns=features),
+    pd.DataFrame(y_scaled, columns=target_cols),
+    LAG,
+    HORIZON
+)
 
 ###############################################################################
 # === Train/Test Split ===
@@ -107,19 +111,31 @@ train_size = int(0.8 * len(X_seq))
 X_train, y_train = X_seq[:train_size], y_seq[:train_size]
 X_val, y_val = X_seq[train_size:], y_seq[train_size:]
 
+print(y_train.shape)
+print(y_val.shape)
+
 ###############################################################################
 # === Build GRU Model ===
 def build_gru_model(input_shape, hidden_units, dropout):
-    model = Sequential()
+    """Build GRU model for multi-output forecasting (24-hour horizon)."""
+    model = Sequential(name="GRU_forecast")
+
+    # --- Input layer ---
+    model.add(Input(shape=input_shape))
+
+    # --- GRU layers ---
     for i, units in enumerate(hidden_units):
-        return_sequences = i < len(hidden_units) - 1
-        if i == 0:
-            model.add(GRU(units, return_sequences=return_sequences, input_shape=input_shape))
-        else:
-            model.add(GRU(units, return_sequences=return_sequences))
+        # Tutte le GRU tranne l'ultima devono restituire la sequenza
+        return_sequences = (i != len(hidden_units) - 1)
+        model.add(GRU(units, return_sequences=return_sequences, name=f"GRU_{i+1}"))
         if dropout > 0:
-            model.add(Dropout(dropout))
-    model.add(Dense(HORIZON))  # Multi-step output
+            model.add(Dropout(dropout, name=f"Dropout_{i+1}"))
+
+    # --- Dense layers ---
+    model.add(Dense(64, activation='relu', name="Dense_1"))
+    model.add(Dense(HORIZON, name="Output"))  # 24-hour multi-step output
+
+    # --- Compile ---
     model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=LR), loss='mse')
     return model
 
@@ -143,6 +159,10 @@ params = {
 with open(PARAMS_PATH, "w", encoding="utf-8") as f:
     json.dump(params, f, indent=4, ensure_ascii=False)
 print(f"✅ Saved parameters to {PARAMS_PATH}")
+
+with open(FEATURES_PATH, "w", encoding="utf-8") as f:
+    json.dump(features, f, indent=4, ensure_ascii=False)
+print(f"✅ Saved features list to {FEATURES_PATH}")
 
 ###############################################################################
 # === Callbacks ===
@@ -246,7 +266,7 @@ params_info = {
 
 errors = [(target_item, r2, mae, rmse)]
 
-report_file = f"gru_multi_output_{station_name}_{prefecture_code}_{station_code}_{target_item}.pdf"
+report_file = f"gru_parameter_selection_multi_output_{station_name}_{prefecture_code}_{station_code}_{target_item}.pdf"
 report_path = os.path.join("..", "reports", report_file)
 os.makedirs(os.path.dirname(report_path), exist_ok=True)
 
