@@ -494,5 +494,5 @@ save_model_report_pdf(
     map_image_path=screenshot_path,
     labels_image_path=labels_image_path,
     additional_image_path=loocv_image,
-    title=f"Simple Kriging Interpolation - {year}/{month}/{day} {hour:02d}H"
+    title=f"Random Forest Interpolation - {year}/{month}/{day} {hour:02d}H"
 )
