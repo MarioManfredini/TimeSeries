@@ -134,12 +134,72 @@ def save_model_report_pdf(
     additional_image_path=None,
     title="Model Report"
 ):
+    # === Imports ===
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.units import mm
     from PIL import Image
     import os
 
+    # === Import font utilities ===
+    import platform
+    import matplotlib.pyplot as plt
+    import matplotlib.font_manager as fm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
+    # === Japanese-font helper ===
+    def set_japanese_font(verbose=True):
+        system = platform.system()
+        font_candidates = []
+
+        if system == "Darwin":  # macOS
+            font_candidates = [
+                "/System/Library/Fonts/Hiragino Kaku Gothic ProN.ttc",
+                "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                "/System/Library/Fonts/YuGothic-Medium.otf",
+            ]
+        elif system == "Windows":
+            font_candidates = [
+                r"C:\Windows\Fonts\YuGothM.ttc",
+                r"C:\Windows\Fonts\meiryo.ttc",
+                r"C:\Windows\Fonts\msgothic.ttc",
+            ]
+        else:  # Linux
+            font_candidates = [
+                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/truetype/takao-gothic/TakaoGothic.ttf",
+            ]
+
+        font_path = next((p for p in font_candidates if os.path.exists(p)), None)
+
+        if font_path:
+            prop = fm.FontProperties(fname=font_path)
+            font_name = prop.get_name()
+
+            # Matplotlib
+            plt.rcParams['font.family'] = font_name
+            plt.rcParams['font.sans-serif'] = [font_name]
+            plt.rcParams['axes.unicode_minus'] = False
+
+            # ReportLab
+            try:
+                pdfmetrics.registerFont(TTFont(font_name, font_path))
+            except Exception:
+                pdfmetrics.registerFont(UnicodeCIDFont("HeiseiMin-W3"))
+                return "HeiseiMin-W3"
+
+            return font_name
+        else:
+            pdfmetrics.registerFont(UnicodeCIDFont("HeiseiMin-W3"))
+            return "HeiseiMin-W3"
+
+    # === Set Japanese PDF-friendly font ===
+    jp_font = set_japanese_font(verbose=False)
+    jp_font_bold = jp_font  # Some Japanese fonts have no bold variant
+
+    # === Canvas ===
     page_width, page_height = landscape(A4)
     c = canvas.Canvas(output_path, pagesize=(page_width, page_height))
     margin = 15 * mm
@@ -148,7 +208,7 @@ def save_model_report_pdf(
     col2_w = page_width * (2 / 3)
 
     # === Title ===
-    c.setFont("Helvetica-Bold", 15)
+    c.setFont(jp_font, 15)
     c.drawString(margin, page_height - margin, title)
 
     # === Formula image ===
@@ -167,10 +227,11 @@ def save_model_report_pdf(
                     width=image_target_width, height=image_target_height,
                     preserveAspectRatio=True, mask='auto')
     else:
-        c.setFont("Helvetica", 10)
-        c.drawString(margin, page_height - margin - 10 * mm, "(Formula image missing)")
+        c.setFont(jp_font, 10)
+        c.drawString(margin, page_height - margin - 10 * mm,
+                     "(Formula image missing)")
 
-    # === Labels image (e.g. Kriging or IDW map with station values) ===
+    # === Labels image ===
     if labels_image_path and os.path.exists(labels_image_path):
         labels_image = Image.open(labels_image_path)
         labels_image_w, labels_image_h = labels_image.size
@@ -186,14 +247,16 @@ def save_model_report_pdf(
                     width=image_target_width, height=image_target_height,
                     preserveAspectRatio=True, mask='auto')
     else:
-        c.setFont("Helvetica", 10)
-        c.drawString(margin, page_height / 2, "(Labels image missing)")
+        c.setFont(jp_font, 10)
+        c.drawString(margin, page_height / 2,
+                     "(Labels image missing)")
 
-    # === Map image (e.g. screenshot of folium map) ===
+    # === Map image (right column top) ===
     map_x = col1_w + margin
     map_max_w = col2_w - 2 * margin
     map_max_h = 80 * mm
     y_map = page_height - (margin * 1.5) - map_max_h
+
     if map_image_path and os.path.exists(map_image_path):
         img = Image.open(map_image_path)
         aspect = img.height / img.width
@@ -205,35 +268,32 @@ def save_model_report_pdf(
         c.drawImage(map_image_path, map_x, y_map,
                     width=new_w, height=new_h, preserveAspectRatio=True, mask="auto")
     else:
-        c.setFont("Helvetica", 10)
-        c.drawString(map_x, y_map + map_max_h / 2, "(Map image missing)")
+        c.setFont(jp_font, 10)
+        c.drawString(map_x, y_map + map_max_h / 2,
+                     "(Map image missing)")
 
-    # === Create and draw the table using Platypus ===
-    # Convert column_headers and table_data to full table format
+    # === Table (bottom right) ===
     data = [column_headers] + table_data
-    
     col_widths = [16 * mm] * len(column_headers)
+
     table = Table(data, colWidths=col_widths)
-    # Style the table
-    style = TableStyle([
+
+    table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTNAME', (0, 0), (-1, 0), jp_font_bold),
+        ('FONTNAME', (0, 1), (-1, -1), jp_font),
         ('FONTSIZE', (0, 0), (-1, 0), 8),
         ('FONTSIZE', (0, 1), (-1, -1), 7),
         ('TOPPADDING', (0, 0), (-1, -1), 1),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 0.8),
         ('GRID', (0, 0), (-1, -1), 0.2, colors.black),
-    ])
-    table.setStyle(style)
-    
-    # Convert y from bottom-left origin (Platypus uses top-down)
+    ]))
+
     table_x = map_x
     table_y = y_map - 5 * mm
-    
-    # Wrap and draw the table at a fixed position
+
     table.wrapOn(c, 0, 0)
     table.drawOn(c, table_x, table_y - table._height)
 
@@ -255,9 +315,12 @@ def save_model_report_pdf(
                     width=add_img_w, height=add_img_h,
                     preserveAspectRatio=True, mask='auto')
     else:
-        c.setFont("Helvetica", 10)
-        c.drawString(map_x + map_max_w - 50 * mm, margin + 5 * mm, "(Additional image missing)")
+        c.setFont(jp_font, 10)
+        c.drawString(map_x + map_max_w - 50 * mm,
+                     margin + 5 * mm,
+                     "(Additional image missing)")
 
     c.showPage()
     c.save()
     print(f"✅ PDF report saved to: {output_path}")
+

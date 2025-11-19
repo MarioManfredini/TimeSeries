@@ -10,6 +10,19 @@ import pandas as pd
 import folium
 import os
 
+from pathlib import Path
+
+###############################################################################
+# File and path configuration
+data_dir = Path('..') / 'data' / 'Osaka'
+prefecture_code = '27'
+prefecture_name = '大阪府'
+target = 'Ox(ppm)'
+station_coordinates = 'Stations_Ox.csv'
+csv_path = os.path.join(data_dir, station_coordinates)
+year = 2025
+month = 5
+
 ###############################################################################
 def load_latest_values(target, data_dir, stations_df, year, month, prefecture_code):
     """
@@ -59,13 +72,6 @@ def load_latest_values(target, data_dir, stations_df, year, month, prefecture_co
     return data
 
 ###############################################################################
-# File and path configuration
-data_dir = '..\\data\\Osaka\\'
-prefecture_code = '27'
-target = 'Ox(ppm)'
-station_coordinates = 'Stations_Ox.csv'
-csv_path = os.path.join(data_dir, station_coordinates)
-
 # Load station coordinates
 df = pd.read_csv(csv_path, skipinitialspace=True)
 
@@ -74,8 +80,8 @@ data = load_latest_values(
     target,
     data_dir,
     stations_df=df,
-    year=2025,
-    month=5,
+    year=year,
+    month=month,
     prefecture_code=prefecture_code
 )
 
@@ -119,6 +125,10 @@ for _, row in df.iterrows():
     ).add_to(m)
 
 # Save the map as an HTML file
-output_path = 'map_one_hour.html'
-m.save(output_path)
-print(f"[INFO] Map saved to: {output_path}")
+html_file = (
+    f'map_one_hour_{prefecture_name}_{target}_{year}{month}_lasthour.html'
+)
+html_path = os.path.join("..", "html", html_file)
+os.makedirs(os.path.dirname(html_path), exist_ok=True)
+m.save(html_path)
+print(f"Map saved to: {html_path}")

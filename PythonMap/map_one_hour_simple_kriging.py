@@ -4,196 +4,36 @@ Created: 2025/06/29
 
 Author: Mario
 """
+
+import os
 import numpy as np
-import matplotlib.pyplot as plt
 import folium
 
+from pathlib import Path
 from folium.raster_layers import ImageOverlay
-from pykrige.ok import OrdinaryKriging
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from matplotlib.patches import Rectangle
 
 from map_utils import (
     load_preprocessed_hourly_data,
     compute_bounds_from_df,
-    get_variogram_parameters,
     generate_ordinary_kriging_grid,
     generate_confidence_overlay_image
 )
-from map_report import save_model_report_pdf, capture_html_map_screenshot, save_kriging_formula_as_jpg, plot_loocv_results
+from map_report import (
+    save_model_report_pdf,
+    capture_html_map_screenshot,
+    save_kriging_formula_as_jpg,
+    plot_loocv_results
+)
+from map_one_hour_simple_kriging_helper import (
+    evaluate_kriging_loocv,
+    generate_kriging_image_with_labels_only
+)
 
 ###############################################################################
-def evaluate_kriging_loocv(target, df, variogram_model='linear', transform=None):
-    """
-    Evaluate LOOCV performance for Ordinary Kriging using a given variogram model,
-    with optional transformation (e.g., 'log', 'sqrt').
-
-    Parameters:
-        df: DataFrame with 'longitude', 'latitude', measurements
-        variogram_model: str, variogram model name
-        transform: str or None. Options: 'log', 'sqrt', None
-
-    Returns:
-        rmse, mae, r2
-    """
-    epsilon = 1e-4  # For log transform
-
-    x_all = df['longitude'].values
-    y_all = df['latitude'].values
-    z_raw = df[target].values
-
-    # === Apply transformation ===
-    if transform == 'log':
-        z_all = np.log(z_raw + epsilon)
-        inverse_transform = lambda x: np.exp(x) - epsilon
-    elif transform == 'sqrt':
-        z_all = np.sqrt(z_raw)
-        inverse_transform = lambda x: x ** 2
-    else:
-        z_all = z_raw
-        inverse_transform = lambda x: x
-
-    preds = []
-    trues = []
-
-    for i in range(len(z_all)):
-        x_train = np.delete(x_all, i)
-        y_train = np.delete(y_all, i)
-        z_train = np.delete(z_all, i)
-
-        x_test = x_all[i]
-        y_test = y_all[i]
-        z_true = z_raw[i]  # always compare in original scale
-
-        try:
-            params = get_variogram_parameters(variogram_model)
-            ok = OrdinaryKriging(
-                x_train, y_train, z_train,
-                variogram_model=variogram_model,
-                variogram_parameters=params,
-                verbose=False, enable_plotting=False
-            )
-            z_pred_transf, _ = ok.execute('points', np.array([x_test]), np.array([y_test]))
-            z_pred = inverse_transform(z_pred_transf[0])
-            preds.append(z_pred)
-            trues.append(z_true)
-        except Exception as e:
-            print(f"⚠️ LOOCV failed at point {i}: {e}")
-            continue
-
-    mse = mean_squared_error(trues, preds)
-    rmse = mse ** 0.5
-    mae = mean_absolute_error(trues, preds)
-    r2 = r2_score(trues, preds)
-    return rmse, mae, r2, trues, preds
-
-###############################################################################
-def generate_kriging_image_with_labels_only(
-    target,
-    df,
-    bounds,
-    vmin,
-    vmax,
-    variogram_model='linear',
-    transform=None,
-    output_file='kriging_labels.png',
-    num_cells=800
-):
-    """
-    Generate a Simple Kriging interpolated grayscale image with
-    station locations and measurement labels (no map, no wind).
-    """
-    if vmin is None or vmax is None:
-        raise ValueError("vmin and vmax must be provided to ensure consistent grayscale.")
-
-    x = df['longitude'].values
-    y = df['latitude'].values
-    z_raw = df[target].values
-    
-    # === Apply transformation ===
-    epsilon = 1e-4  # For log transform
-    if transform == 'log':
-        z = np.log(z_raw + epsilon)
-        inverse_transform = lambda x: np.exp(x) - epsilon
-    elif transform == 'sqrt':
-        z = np.sqrt(z_raw)
-        inverse_transform = lambda x: x ** 2
-    else:
-        z = z_raw
-        inverse_transform = lambda x: x
-
-    (lat_min, lon_min), (lat_max, lon_max) = bounds
-
-    # === Create grid ===
-    grid_x = np.linspace(lon_min, lon_max, num_cells)
-    grid_y = np.linspace(lat_min, lat_max, num_cells)
-
-    # === Fit Kriging model ===
-    ok = OrdinaryKriging(
-        x, y, z,
-        variogram_model=variogram_model,
-        verbose=False,
-        enable_plotting=False
-    )
-
-    grid_z_transf, _ = ok.execute('grid', grid_x, grid_y)
-    grid_z = inverse_transform(grid_z_transf)
-
-    # === Plot ===
-    aspect_ratio = (lat_max - lat_min) / (lon_max - lon_min)
-    width = 6
-    height = width * aspect_ratio
-
-    fig, ax = plt.subplots(figsize=(width, height), dpi=200)
-    ax.axis('off')
-
-    ax.imshow(
-        grid_z,
-        extent=(lon_min, lon_max, lat_min, lat_max),
-        origin='lower',
-        vmin=vmin,
-        vmax=vmax,
-        cmap='Greys',
-        alpha=0.9,
-        aspect='auto'
-    )
-
-    # Bounding box of measured area
-    rect = Rectangle(
-        (x.min(), y.min()),
-        x.max() - x.min(),
-        y.max() - y.min(),
-        linewidth=1.5,
-        edgecolor='black',
-        linestyle='--',
-        facecolor='none'
-    )
-    ax.add_patch(rect)
-
-    # === Station markers and labels ===
-    ax.scatter(x, y, c='black', edgecolor='white', s=50, zorder=5)
-
-    for i, row in df.iterrows():
-        ax.text(
-            row['longitude'] + 0.01,
-            row['latitude'] + 0.005,
-            f"{row[target]:.3f}",
-            fontsize=6,
-            color='black',
-            bbox=dict(facecolor='white', edgecolor='none', alpha=0.7, pad=1),
-            zorder=6
-        )
-
-    plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
-    plt.savefig(output_file, transparent=True, bbox_inches='tight', pad_inches=0)
-    plt.close()
-    print(f"✅ Kriging label image saved to: {output_file}")
-
-###############################################################################
-
 # === CONFIG ===
-data_dir = '..\\data\\Osaka\\'
+data_dir = Path('..') / 'data' / 'Osaka'
 prefecture_code = '27'
+prefecture_name = '大阪府'
 station_coordinates = 'Stations_Ox.csv'
 target = 'Ox(ppm)'
 year = 2025
@@ -231,9 +71,17 @@ best_model = best[0]
 best_transform = best[1]
 print(f"\n✅ Best model by R²: {best_model}, {best_transform} transform → RMSE={best[2]:.5f}, MAE={best[3]:.5f}, R²={best[4]:.3f}")
 
-rmse, mae, r2, trues, preds = evaluate_kriging_loocv(target, df, variogram_model=best_model, transform=best_transform)
+rmse, mae, r2, trues, preds = evaluate_kriging_loocv(target,
+                                                     df,
+                                                     variogram_model=best_model,
+                                                     transform=best_transform
+                                                     )
+
 loocv_image="loocv.png"
-plot_loocv_results(target, rmse, mae, r2, trues, preds, loocv_image)
+loocv_image_path = os.path.join(".", "tmp", loocv_image)
+os.makedirs(os.path.dirname(loocv_image_path), exist_ok=True)
+
+plot_loocv_results(target, rmse, mae, r2, trues, preds, loocv_image_path)
 
 # === Compute bounds and color scale ===
 bounds = compute_bounds_from_df(df, margin_ratio=0.10)
@@ -251,13 +99,16 @@ grid = generate_ordinary_kriging_grid(
 
 # === Generate confidence overlay image ===
 output_file = 'prediction.png'
+output_file_path = os.path.join(".", "tmp", output_file)
+os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
+
 generate_confidence_overlay_image(
     df,
     bounds,
     grid,
     vmin,
     vmax,
-    output_file,
+    output_file_path,
     cmap_name='Reds'
 )
 
@@ -271,7 +122,7 @@ m = folium.Map(location=[center_lat, center_lon], zoom_start=10)
 
 image_overlay = ImageOverlay(
     name=f"Simple Kriging {target}",
-    image=output_file,
+    image=output_file_path,
     bounds=[[bounds[0][0], bounds[0][1]], [bounds[1][0], bounds[1][1]]],
     opacity=0.7,
     interactive=False,
@@ -281,14 +132,24 @@ image_overlay = ImageOverlay(
 image_overlay.add_to(m)
 
 # Save interactive map
-html_path = "map_one_hour_simple_kriging.html"
+html_file = (
+    f'map_simple_kriging_one_hour_{prefecture_name}_{target}_{year}{month}{day}{hour}.html'
+)
+html_path = os.path.join("..", "html", html_file)
+os.makedirs(os.path.dirname(html_path), exist_ok=True)
 m.save(html_path)
 print(f"✅ Map saved to: {html_path}")
 
-formula_image_path = 'formula.jpg'
+formula_image = 'formula.jpg'
+formula_image_path = os.path.join(".", "tmp", formula_image)
+os.makedirs(os.path.dirname(formula_image_path), exist_ok=True)
+
 save_kriging_formula_as_jpg(formula_image_path)
 
-kriging_labels_image_path = 'labels_image.png'
+labels_image = 'labels_image.png'
+labels_image_path = os.path.join(".", "tmp", labels_image)
+os.makedirs(os.path.dirname(labels_image_path), exist_ok=True)
+
 generate_kriging_image_with_labels_only(
     target,
     df,
@@ -297,11 +158,13 @@ generate_kriging_image_with_labels_only(
     vmax,
     variogram_model=best_model,
     transform=best_transform,
-    output_file=kriging_labels_image_path,
+    output_file=labels_image_path,
     num_cells=300
 )
 
-screenshot_path = "screenshot.jpg"
+screenshot = "screenshot.jpg"
+screenshot_path = os.path.join(".", "tmp", screenshot)
+os.makedirs(os.path.dirname(screenshot_path), exist_ok=True)
 capture_html_map_screenshot(html_path, screenshot_path)
 
 column_headers = ["Variogram", "Transform", "RMSE", "MAE", "R²"]
@@ -315,13 +178,21 @@ for model, t_label, rmse, mae, r2 in results:
         f"{r2:.3f}"
     ])
 
+###############################################################################
+# === Save Report ===
+report_file = (
+    f'map_simple_kriging_{prefecture_name}_{target}_{year}{month:02}{day:02}_{hour:02}00.pdf'
+)
+report_path = os.path.join("..", "reports", report_file)
+os.makedirs(os.path.dirname(report_path), exist_ok=True)
+
 save_model_report_pdf(
-    output_path="simple_kriging_report.pdf",
+    output_path=report_path,
     table_data=table_data,
     column_headers=column_headers,
     formula_image_path=formula_image_path,
     map_image_path=screenshot_path,
-    labels_image_path=kriging_labels_image_path,
-    additional_image_path=loocv_image,
-    title=f"Simple Kriging Interpolation - {year}/{month}/{day} {hour:02d}H"
+    labels_image_path=labels_image_path,
+    additional_image_path=loocv_image_path,
+    title=f"Simple Kriging Interpolation - {prefecture_name} - {year}/{month}/{day} {hour:02d}H"
 )

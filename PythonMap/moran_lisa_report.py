@@ -10,11 +10,25 @@ import tempfile
 import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
+
+from pathlib import Path
 from shapely.geometry import Point
 from libpysal.weights import DistanceBand
 from esda.moran import Moran, Moran_Local
 from matplotlib.backends.backend_pdf import PdfPages
 from map_utils import load_station_temporal_features
+
+###############################################################################
+# === CONFIGURATION ===
+data_dir = Path('..') / 'data' / 'Osaka'
+prefecture_name = '大阪府'
+prefecture_code = '27'
+station_coordinates = 'Stations_Ox.csv'
+target = 'Ox(ppm)'
+year = 2025
+month = 5
+day = 12
+hour = 12
 
 ###############################################################################
 def save_moran_summary_pdf(target_variable, moran, year, month, day, hour, fig, filename="moran_summary.pdf"):
@@ -63,18 +77,6 @@ def save_moran_summary_pdf(target_variable, moran, year, month, day, hour, fig, 
 
 
 ###############################################################################
-# === CONFIGURATION ===
-data_dir = '..\\data\\Osaka\\'
-prefecture_code = '27'
-station_coordinates = 'Stations_Ox.csv'
-target = 'Ox(ppm)'
-year = 2025
-month = 5
-day = 12
-hour = 12
-output_pdf = f"moran_lisa_report_{target}_{year}{month:02}{day:02}_{hour:02}00.pdf"
-lisa_image = "lisa_plot.png"
-
 # === Load and prepare data ===
 csv_path = os.path.join(data_dir, station_coordinates)
 df = pd.read_csv(csv_path, skipinitialspace=True)
@@ -148,10 +150,11 @@ ax.axis('off')
 ax.set_title(f"Local Moran's I - LISA Clusters ({target})")
 ax.legend()
 
-plt.tight_layout(pad=0)
-plt.savefig(lisa_image, dpi=300)
-plt.close()
-print(f"[INFO] LISA plot saved to: {lisa_image}")
+# === Save Report ===
+report_file = (
+    f"map_moran_lisa_{prefecture_name}_{target}_{year}{month:02}{day:02}_{hour:02}00.pdf"
+)
+report_path = os.path.join("..", "reports", report_file)
+os.makedirs(os.path.dirname(report_path), exist_ok=True)
 
-# === Create PDF report ===
-save_moran_summary_pdf(target, moran, year, month, day, hour, fig, filename=output_pdf)
+save_moran_summary_pdf(target, moran, year, month, day, hour, fig, filename=report_path)

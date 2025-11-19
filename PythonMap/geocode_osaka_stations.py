@@ -11,36 +11,36 @@ import re
 
 def normalize_address(raw_address):
     """
-    Normalizza un indirizzo giapponese concatenato per Nominatim.
-    - Aggiunge spazi tra prefettura, città, quartiere
-    - Rimuove numero civico
-    Esempio:
+    Normalize a concatenated Japanese address for Nominatim.
+    - Adds spaces between prefecture, city, ward, etc.
+    - Removes house number
+    Example:
       "大阪府大阪市此花区春日出北１－８－４"
-    → "日本 大阪府 大阪市 此花区 春日出北"
+    → "Japan 大阪府 大阪市 此花区 春日出北"
     """
     address = raw_address.strip()
 
-    # Rimuove tutto dopo il primo numero civico
+    # Remove everything after the first house-number pattern
     address = re.sub(r'[０-９0-9一二三四五六七八九十百千万]+[－ー-][０-９0-9一二三四五六七八九十百千万－ー-]+$', '', address)
 
-    # Aggiunge spazio dopo i termini giapponesi geografici
-    # 都道府県市区町村を基に分割
+    # Add space after Japanese administrative division keywords
+    # Split based on prefecture/city/ward/town/village identifiers
     keywords = ['都', '道', '府', '県', '市', '区', '町', '村']
     for kw in keywords:
         address = address.replace(kw, kw + ' ')
 
-    # Rimuove spazi multipli
+    # Remove multiple spaces
     address = re.sub(r'\s+', ' ', address)
 
-    # Aggiunge prefisso "日本"
-    return '日本 ' + address.strip()
+    # Add "Japan" prefix
+    return 'Japan ' + address.strip()
 
 # === Config ===
 input_file = 'OsakaStationAddress.csv'
 output_file = 'OsakaStationAddress_Coordinates.csv'
-wait_seconds = 2  # rispetta il rate limit di Nominatim
+wait_seconds = 2  # respect Nominatim rate limit
 
-# === Inizializza geocoder ===
+# === Initialize geocoder ===
 geolocator = Nominatim(user_agent="ox-map-geocoder")
 
 def geocode_address(address):
@@ -52,13 +52,13 @@ def geocode_address(address):
         print(f"[ERROR] {address}: {e}")
     return None, None
 
-# === Leggi file CSV input ===
+# === Read input CSV file ===
 df = pd.read_csv(input_file, encoding='utf-8-sig', skipinitialspace=True)
 
-# Verifica colonne richieste
+# Check required columns
 required_columns = {'station_code', 'station_name', 'station_address'}
 if not required_columns.issubset(df.columns):
-    raise ValueError(f"Il file deve contenere le colonne: {required_columns}")
+    raise ValueError(f"The file must contain the columns: {required_columns}")
 
 # === Geocoding ===
 results = []
@@ -74,7 +74,7 @@ for idx, row in df.iterrows():
     lat, lon = geocode_address(normalized)
 
     if lat is None or lon is None:
-        print(f"  ⚠️ Coordinate non trovate per: {name}")
+        print(f"  ⚠️ Coordinates not found for: {name}")
     else:
         print(f"  → Lat: {lat:.6f}, Lon: {lon:.6f}")
 
@@ -87,8 +87,8 @@ for idx, row in df.iterrows():
 
     sleep(wait_seconds)
 
-# === Scrivi il CSV di output ===
+# === Write output CSV ===
 output_df = pd.DataFrame(results)
 output_df.to_csv(output_file, index=False, encoding='utf-8-sig')
 
-print(f"\n✅ File salvato come: {output_file}")
+print(f"\n✅ File saved as: {output_file}")
