@@ -178,7 +178,9 @@ os.makedirs(os.path.dirname(html_path), exist_ok=True)
 m.save(html_path)
 print(f"✅ Map saved to: {html_path}")
 
-formula_image_path = 'formula.jpg'
+formula_image = 'formula.jpg'
+formula_image_path = os.path.join(".", "tmp", formula_image)
+os.makedirs(os.path.dirname(formula_image_path), exist_ok=True)
 save_kriging_formula_as_jpg(formula_image_path)
 
 labels_image = 'labels_image.png'

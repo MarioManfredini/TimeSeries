@@ -21,7 +21,7 @@ from map_utils import (
 from map_report import save_model_report_pdf, capture_html_map_screenshot
 from map_one_hour_idw_helper import (
     idw_loocv,
-    save_idw_formula_as_jpg,
+    save_rf_formula_as_jpg,
     generate_idw_image_with_labels_only
 )
 
@@ -143,7 +143,7 @@ print(f"Map saved to: {html_path}")
 formula_image = 'formula.jpg'
 formula_image_path = os.path.join(".", "tmp", formula_image)
 os.makedirs(os.path.dirname(formula_image_path), exist_ok=True)
-save_idw_formula_as_jpg(filename=formula_image_path)
+save_rf_formula_as_jpg(filename=formula_image_path)
 
 idw_labels_image = 'prediction.png'
 idw_labels_image_path = os.path.join(".", "tmp", idw_labels_image)

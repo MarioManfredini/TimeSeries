@@ -790,3 +790,51 @@ def generate_confidence_overlay_image(
     confidence = compute_confidence_mask(df_coords, grid.shape, bounds, max_distance_km)
     rgba = create_confidence_overlay(confidence, color_img)
     plot_confidence_image(rgba, df, bounds, output_file, title, add_wind, bbox, station_marker)
+
+###############################################################################
+def idw_grid_vectorized(df, grid_lon, grid_lat, features, p=2):
+    """
+    Compute IDW interpolation for all non-geographic features in df
+    across a full grid, in a vectorized manner.
+
+    Returns:
+        dict: { feature_name: 2D array interpolated on the grid }
+    """
+
+    # Coordinate matrices: shape (Ny, Nx)
+    glon = grid_lon
+    glat = grid_lat
+
+    # Station coordinates: shape (N,)
+    slon = df["longitude"].values.reshape(1, 1, -1)
+    slat = df["latitude"].values.reshape(1, 1, -1)
+
+    # =============================
+    # Distance matrix: (Ny, Nx, N)
+    # =============================
+    dist = np.sqrt((glon[..., None] - slon)**2 +
+                   (glat[..., None] - slat)**2)
+
+    # Avoid division by zero
+    dist = np.where(dist == 0, 1e-12, dist)
+
+    # Weight matrix
+    w = 1 / (dist ** p)
+
+    results = {}
+
+    # =============================
+    # IDW for each non-geo feature
+    # =============================
+    for f in features:
+        if f in ("longitude", "latitude"):
+            continue
+
+        vals = df[f].values.reshape(1, 1, -1)
+
+        num = np.sum(w * vals, axis=2)
+        den = np.sum(w, axis=2)
+
+        results[f] = num / den
+
+    return results

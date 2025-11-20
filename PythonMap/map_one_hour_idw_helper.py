@@ -156,30 +156,36 @@ def idw_loocv(
     return rmse, mae, r2
 
 ###############################################################################
-def save_idw_formula_as_jpg(filename="formula_idw.jpg"):
+def save_rf_formula_as_jpg(filename="formula_rf.jpg"):
+    """
+    Save a visual explanation of the Random Forest model as a JPEG image.
+
+    Parameters:
+        filename: output file path
+    """
     formula = (
-        r"$\hat{z}(x_0) = \frac{\sum_{i=1}^{k} w_i z_i}"
-        r"{\sum_{i=1}^{k} w_i}, \quad \text{where } w_i = \frac{1}{d(x_0, x_i)^p}$"
+        r"$\hat{y} = \frac{1}{T} \sum_{t=1}^{T} f_t(x)$"
     )
 
     explanation_lines = [
-        r"$x_0$: location to interpolate",
-        r"$x_i$: known data point location",
-        r"$z_i$: known value at $x_i$",
-        r"$d(x_0, x_i)$: distance between $x_0$ and $x_i$",
-        r"$w_i$: weight of $z_i$",
-        r"$p$: power parameter (controls weight decay)",
-        r"$k$: number of nearest neighbors"
+        r"$\hat{y}$: predicted value (e.g., Ox concentration)",
+        r"$T$: total number of trees in the forest",
+        r"$f_t(x)$: prediction of tree $t$ for input $x$",
+        r"$x$: input features (e.g., NO, NO₂, U, V, longitude, latitude)",
+        "",
+        r"Each tree is trained on a bootstrap sample",
+        r"and uses a random subset of features at each split.",
+        r"Final prediction is the average of all tree outputs."
     ]
 
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.axis('off')
 
-    # Formula centered on top
+    # Title formula
     ax.text(0, 1, formula, fontsize=18, ha='left', va='center')
 
-    # Explanation aligned to left below
-    y_start = 0.7
+    # Explanation
+    y_start = 0.75
     line_spacing = 0.07
     for i, line in enumerate(explanation_lines):
         ax.text(0, y_start - i * line_spacing, line,
@@ -187,13 +193,14 @@ def save_idw_formula_as_jpg(filename="formula_idw.jpg"):
 
     plt.tight_layout()
 
-    temp_file = "_temp_formula.png"
+    temp_file = "_temp_rf_formula.png"
     fig.savefig(temp_file, dpi=300, bbox_inches='tight', pad_inches=0.2)
     plt.close(fig)
 
+    # Convert to JPEG
     img = Image.open(temp_file).convert("RGB")
     img.save(filename, format="JPEG", quality=95)
     img.close()
-
     os.remove(temp_file)
-    print(f"✅ Saved JPEG formula image with explanation as {filename}")
+
+    print(f"✅ Saved RF formula JPEG to {filename}")
