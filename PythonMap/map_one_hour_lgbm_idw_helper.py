@@ -435,56 +435,60 @@ def generate_lgbm_idw_labels_image(
     plt.savefig(output_file, bbox_inches="tight", pad_inches=0, transparent=True)
     plt.close()
 
-    print(f"✅ LGBM + IDW + Kriging (labels) image saved to: {output_file}")
+    print(f"✅ LGBM + IDW image saved to: {output_file}")
 
 
 ###############################################################################
-def save_lgbm_formula_as_jpg(filename="formula_lgbm_kriging.jpg"):
+def save_lgbm_idw_formula_as_jpg(filename="formula_lgbm_idw.jpg"):
     """
-    Save a visual explanation of the LightGBM + Kriging prediction as a JPEG image.
+    Save a visual explanation of the LightGBM + IDW formula as a JPEG image.
 
     Parameters:
         filename: output file path
     """
+
     formula = (
-        r"$\hat{y}(x) = f_{\mathrm{LGBM}}(x) + r_{\mathrm{Kriging}}(x)$"
+        r"$\hat{Z}(x) = \hat{Z}_{LGBM}(x) \;+\; "
+        r"\frac{\sum_{i=1}^{N} \frac{\hat{Z}_{LGBM}(x_i)}{d(x,x_i)^p}}"
+        r"{\sum_{i=1}^{N} \frac{1}{d(x,x_i)^p}}$"
     )
 
     explanation_lines = [
-        r"$\hat{y}(x)$: final predicted value at location $x$ (e.g., Ox concentration)",
-        r"$f_{\mathrm{LGBM}}(x)$: prediction from the LightGBM model at $x$",
-        r"$r_{\mathrm{Kriging}}(x)$: interpolated residual at $x$ using Ordinary Kriging",
-        "",
-        r"Step 1: Train LightGBM with LOOCV and compute residuals",
-        r"Step 2: Fit Ordinary Kriging on residuals from training stations",
-        r"Step 3: Predict on a spatial grid and combine the two terms",
-        "",
-        r"Kriging captures spatial patterns not learned by LightGBM."
+        r"$\hat{Z}(x)$ : Final estimated Ox at location $x$",
+        r"$\hat{Z}_{LGBM}(x)$ : LightGBM prediction at location $x$",
+        r"$x_i$ : Monitoring station locations",
+        r"$d(x,x_i)$ : Distance between point $x$ and station $i$ (km)",
+        r"$p$ : IDW power parameter (commonly $1 \sim 3$, here $p=2$)",
+        r"The second term is the spatial interpolation (IDW) applied",
+        r"to the LightGBM predictions to add spatial smoothness."
     ]
 
-    fig, ax = plt.subplots(figsize=(6, 4))
+    fig, ax = plt.subplots(figsize=(7, 5))
     ax.axis('off')
 
-    # Title formula
-    ax.text(0, 1, formula, fontsize=20, ha='left', va='center')
+    # Title + formula
+    ax.text(0.02, 0.95, "LightGBM + IDW Interpolation", fontsize=18,
+            ha='left', va='center')
+    ax.text(0.02, 0.75, formula, fontsize=20, ha='left', va='center')
 
-    # Explanation
-    y_start = 0.75
-    line_spacing = 0.07
+    # Explanation lines
+    y_start = 0.55
+    line_spacing = 0.08
     for i, line in enumerate(explanation_lines):
-        ax.text(0, y_start - i * line_spacing, line,
+        ax.text(0.02, y_start - i * line_spacing, line,
                 fontsize=12, ha='left', va='center')
 
     plt.tight_layout()
 
-    temp_file = "_temp_lgbm_kriging_formula.png"
+    # Save temporary PNG
+    temp_file = "_temp_lgbm_idw_formula.png"
     fig.savefig(temp_file, dpi=300, bbox_inches='tight', pad_inches=0.2)
     plt.close(fig)
 
-    # Convert to JPEG
+    # Convert to high-quality JPEG
     img = Image.open(temp_file).convert("RGB")
     img.save(filename, format="JPEG", quality=95)
     img.close()
     os.remove(temp_file)
 
-    print(f"✅ Saved LGBM + Kriging formula JPEG to {filename}")
+    print(f"✅ Saved LGBM + IDW formula JPEG to {filename}")

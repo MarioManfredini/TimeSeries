@@ -21,11 +21,11 @@ from map_report import (
     capture_html_map_screenshot,
     save_model_report_pdf, plot_loocv_results
 )
-from map_one_hour_lgbm_kriging_helper import (
+from map_one_hour_lgbm_idw_helper import (
     compute_lgbm_loocv_residuals,
     kriging_interpolate_residuals,
     generate_combined_confidence_overlay_image,
-    save_lgbm_formula_as_jpg,
+    save_lgbm_idw_formula_as_jpg,
     generate_lgbm_idw_labels_image
 )
 
@@ -145,7 +145,7 @@ formula_image_path = 'formula.jpg'
 formula_image = 'formula.jpg'
 formula_image_path = os.path.join(".", "tmp", formula_image)
 os.makedirs(os.path.dirname(formula_image_path), exist_ok=True)
-save_lgbm_formula_as_jpg(formula_image_path)
+save_lgbm_idw_formula_as_jpg(formula_image_path)
 
 labels_image = 'labels_image.png'
 labels_image_path = os.path.join(".", "tmp", labels_image)
