@@ -76,7 +76,13 @@ for i in range(len(df)):
     y_train = np.delete(y, i)
     X_test = X_scaled[i].reshape(1, -1)
 
-    model = RandomForestRegressor(n_estimators=500, random_state=42)
+    model = RandomForestRegressor(
+        n_estimators=600,
+        max_depth=18,
+        min_samples_leaf=1,
+        random_state=42,
+        n_jobs=-1
+    )
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
 
