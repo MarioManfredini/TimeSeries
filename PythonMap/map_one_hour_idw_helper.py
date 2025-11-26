@@ -122,6 +122,10 @@ def idw_loocv(
     mae = mean_absolute_error(y_true, y_pred)
     r2 = r2_score(y_true, y_pred)
 
+    residuals_df = df[['station_code', 'latitude', 'longitude', target]].copy()
+    residuals_df['prediction'] = y_pred
+    residuals_df['residual'] = residuals_df[target] - residuals_df['prediction']
+
     print("✅ IDW LOOCV completed.")
     print(f"RMSE: {rmse:.5f}, MAE: {mae:.5f}, R²: {r2:.3f}")
 
@@ -153,7 +157,7 @@ def idw_loocv(
         
         print(f"✅ IDW LOOCV Image saved to: {output_file}")
 
-    return rmse, mae, r2
+    return rmse, mae, r2, residuals_df
 
 ###############################################################################
 def save_rf_formula_as_jpg(filename="formula_rf.jpg"):

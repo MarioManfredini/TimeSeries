@@ -5,16 +5,24 @@ Created: 2025/06/22
 Author: Mario
 """
 import os
+import platform
 import time
 import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.font_manager as fm
 
+from reportlab.pdfgen import canvas
 from reportlab.platypus import Table, TableStyle
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.units import mm
 from reportlab.lib import colors
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
 from PIL import Image
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-
 
 ###############################################################################
 def capture_html_map_screenshot(html_path, output_image="map_screenshot.jpg", delay=2, width=1024, height=768):
@@ -132,22 +140,9 @@ def save_model_report_pdf(
     map_image_path=None,
     labels_image_path=None,
     additional_image_path=None,
+    residuals_kriging_image_path=None,
     title="Model Report"
 ):
-    # === Imports ===
-    from reportlab.pdfgen import canvas
-    from reportlab.lib.pagesizes import A4, landscape
-    from reportlab.lib.units import mm
-    from PIL import Image
-    import os
-
-    # === Import font utilities ===
-    import platform
-    import matplotlib.pyplot as plt
-    import matplotlib.font_manager as fm
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
     # === Japanese-font helper ===
     def set_japanese_font(verbose=True):
@@ -296,6 +291,24 @@ def save_model_report_pdf(
 
     table.wrapOn(c, 0, 0)
     table.drawOn(c, table_x, table_y - table._height)
+    
+    # === Kriging residuals image (right column, below table) ===
+    if residuals_kriging_image_path and os.path.exists(residuals_kriging_image_path):
+        img = Image.open(residuals_kriging_image_path)
+        w, h = img.size
+        aspect = h / w
+
+        target_w = map_max_w * 0.9
+        target_h = target_w * aspect
+        if target_h > 70 * mm:
+            target_h = 70 * mm
+            target_w = target_h / aspect
+
+        x = map_x
+        y = (table_y - table._height) - target_h - 5 * mm
+        c.drawImage(residuals_kriging_image_path, x, y,
+                    width=target_w, height=target_h,
+                    preserveAspectRatio=True, mask='auto')
 
     # === Additional image (bottom-right) ===
     if additional_image_path and os.path.exists(additional_image_path):

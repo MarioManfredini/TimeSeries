@@ -15,6 +15,7 @@ from folium.raster_layers import ImageOverlay
 from map_utils import (
     load_preprocessed_hourly_data,
     compute_bounds_from_df,
+    kriging_interpolate_residuals,
     generate_idw_grid,
     generate_confidence_overlay_image
 )
@@ -52,8 +53,8 @@ df = load_preprocessed_hourly_data(
 )
 
 # === test parameters ===
-k_values = [5, 6, 7, 9]
-power_values = [1.0, 1.2, 1.5, 2.0]
+k_values = [8, 9, 10]
+power_values = [0.05, 0.1, 0.7, 0.8, 0.9, 1.0]
 
 print("Grid search over IDW:")
 print(" k  power |   RMSE   |   MAE   |   R²")
@@ -61,7 +62,7 @@ print("-" * 40)
 
 results = []
 for k, power in itertools.product(k_values, power_values):
-    rmse, mae, r2 = idw_loocv(target, df, k, power)
+    rmse, mae, r2, _ = idw_loocv(target, df, k, power)
     print(f"{k:2d}  {power:5.2f} | {rmse:8.5f} | {mae:7.5f} | {r2:6.3f}")
     results.append((k, power, rmse, mae, r2))
 
@@ -78,10 +79,15 @@ loocv_image="loocv.png"
 loocv_image_path = os.path.join(".", "tmp", loocv_image)
 os.makedirs(os.path.dirname(loocv_image_path), exist_ok=True)
 
-rmse, mae, r2 = idw_loocv(target, df, k, power, loocv_image)
+rmse, mae, r2, residuals_df = idw_loocv(target, df, k, power, loocv_image)
 
 # === Compute bounds ===
 bounds = compute_bounds_from_df(df, margin_ratio=0.10)
+
+interpolated_residuals_image = "kriging_of_xgb_residuals.png"
+interpolated_residuals_image_path = os.path.join(".", "tmp", interpolated_residuals_image)
+os.makedirs(os.path.dirname(interpolated_residuals_image_path), exist_ok=True)
+kriging_interpolate_residuals(residuals_df, bounds, output_file=interpolated_residuals_image_path)
 
 # === Generate IDW interpolated grid ===
 grid = generate_idw_grid(

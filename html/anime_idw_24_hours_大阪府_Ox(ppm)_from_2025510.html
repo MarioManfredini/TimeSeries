@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+    
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css"/>
+    <link rel="stylesheet" href="https://netdna.bootstrapcdn.com/bootstrap/3.0.0/css/bootstrap-glyphicons.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.0/css/all.min.css"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/python-visualization/folium/folium/templates/leaflet.awesome.rotate.min.css"/>
+    
+            <meta name="viewport" content="width=device-width,
+                initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <style>
+                #map_26d9bc23bef20f6f10ab72b068951f80 {
+                    position: relative;
+                    width: 100.0%;
+                    height: 100.0%;
+                    left: 0.0%;
+                    top: 0.0%;
+                }
+                .leaflet-container { font-size: 1rem; }
+            </style>
+
+            <style>html, body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+            }
+            </style>
+
+            <style>#map {
+                position:absolute;
+                top:0;
+                bottom:0;
+                right:0;
+                left:0;
+                }
+            </style>
+
+            <script>
+                L_NO_TOUCH = false;
+                L_DISABLE_3D = false;
+            </script>
+
+        
+</head>
+<body>
+    
+    
+            <div class="folium-map" id="map_26d9bc23bef20f6f10ab72b068951f80" ></div>
+        
+
+<style>
+.timestamp-box {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  background-color: rgba(255,255,255,0.8);
+  padding: 8px;
+  font-size: 14px;
+  border-radius: 4px;
+  border: 1px solid #aaa;
+  z-index: 1000;
+  min-width: 280px;
+}
+.timestamp-box span.control-btn {
+  font-size: 16px;
+  margin-left: 6px;
+  cursor: pointer;
+}
+#slider {
+  width: 100%;
+  margin-top: 6px;
+}
+.scale-box {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  background-color: rgba(255,255,255,0.9);
+  padding: 6px 10px;
+  font-size: 14px;
+  border-radius: 4px;
+  border: 1px solid #aaa;
+  z-index: 1000;
+  width: 170px;
+}
+</style>
+
+<div class="timestamp-box">
+  <div>
+    <span id="time-label">---</span>
+    <span id="ctrl-play" class="control-btn">▶️</span>
+    <span id="ctrl-pause" class="control-btn">⏸️</span>
+  </div>
+  <input type="range" id="slider" min="0" max="22" value="0">
+</div>
+
+<div class="scale-box">
+  <div style="font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 6px;">
+    
+  </div>
+  <div style="width: 150px; height: 12px;
+              background: linear-gradient(to right, white, red);
+              margin-bottom: 4px;"></div>
+  <div style="display: flex; justify-content: space-between; font-size: 12px;">
+    <span>0.012</span>
+    <span>0.040</span>
+  </div>
+</div>
+
+<script>
+function getMap() {
+  for (let k in window) if (k.startsWith("map_") && window[k] instanceof L.Map) return window[k];
+  return null;
+}
+function setupAnimation() {
+  const map = getMap();
+  if (!map) { setTimeout(setupAnimation, 100); return; }
+
+  const imgs = [L.imageOverlay("../html/idw_frames/idw_20250501_01.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_02.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_03.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_04.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_05.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_06.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_07.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_08.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_09.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_10.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_11.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_12.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_13.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_14.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_15.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_16.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_17.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_18.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_19.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_20.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_21.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_22.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7}),L.imageOverlay("../html/idw_frames/idw_20250501_23.png", [[34.319362411, 135.21695379], [34.978152679000004, 135.75144711000002]], {opacity:0.7})];
+  const labels = ["2025年 05月 01日 01時","2025年 05月 01日 02時","2025年 05月 01日 03時","2025年 05月 01日 04時","2025年 05月 01日 05時","2025年 05月 01日 06時","2025年 05月 01日 07時","2025年 05月 01日 08時","2025年 05月 01日 09時","2025年 05月 01日 10時","2025年 05月 01日 11時","2025年 05月 01日 12時","2025年 05月 01日 13時","2025年 05月 01日 14時","2025年 05月 01日 15時","2025年 05月 01日 16時","2025年 05月 01日 17時","2025年 05月 01日 18時","2025年 05月 01日 19時","2025年 05月 01日 20時","2025年 05月 01日 21時","2025年 05月 01日 22時","2025年 05月 01日 23時"];
+  const slider = document.getElementById("slider");
+  const labelDiv = document.getElementById("time-label");
+
+  let current = 0;
+  let timer = null;
+
+  function showFrame(idx) {
+    imgs.forEach((img, i) => { if (map.hasLayer(img)) map.removeLayer(img); });
+    map.addLayer(imgs[idx]);
+    labelDiv.innerText = labels[idx];
+    slider.value = idx;
+  }
+
+  function startInterval() {
+    if (timer) return;
+    timer = setInterval(() => {
+      current = (current + 1) % imgs.length;
+      showFrame(current);
+    }, 1000);
+  }
+
+  function stopInterval() {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  }
+
+  document.getElementById("ctrl-play").onclick = () => startInterval();
+  document.getElementById("ctrl-pause").onclick = () => stopInterval();
+
+  slider.oninput = function () {
+    stopInterval();
+    current = parseInt(this.value);
+    showFrame(current);
+  };
+
+  showFrame(0);
+  startInterval();
+}
+setupAnimation();
+</script>
+</body>
+<script>
+    
+    
+            var map_26d9bc23bef20f6f10ab72b068951f80 = L.map(
+                "map_26d9bc23bef20f6f10ab72b068951f80",
+                {
+                    center: [34.65092981008035, 135.5280392243777],
+                    crs: L.CRS.EPSG3857,
+                    ...{
+  "zoom": 10,
+  "zoomControl": true,
+  "preferCanvas": false,
+}
+
+                }
+            );
+
+            
+
+        
+    
+            var tile_layer_24362a2fa8dea6512d4900c507f092d2 = L.tileLayer(
+                "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                {
+  "minZoom": 0,
+  "maxZoom": 19,
+  "maxNativeZoom": 19,
+  "noWrap": false,
+  "attribution": "\u0026copy; \u003ca href=\"https://www.openstreetmap.org/copyright\"\u003eOpenStreetMap\u003c/a\u003e contributors",
+  "subdomains": "abc",
+  "detectRetina": false,
+  "tms": false,
+  "opacity": 1,
+}
+
+            );
+        
+    
+            tile_layer_24362a2fa8dea6512d4900c507f092d2.addTo(map_26d9bc23bef20f6f10ab72b068951f80);
+        
+</script>
+</html>

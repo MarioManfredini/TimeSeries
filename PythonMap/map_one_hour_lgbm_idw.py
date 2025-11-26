@@ -196,5 +196,6 @@ save_model_report_pdf(
     map_image_path=screenshot_path,
     labels_image_path=labels_image_path,
     additional_image_path=loocv_image_path,
+    residuals_kriging_image_path=interpolated_residuals_image_path,
     title=f"LightGBM Interpolation and IDW - {prefecture_name} - {year}/{month}/{day} {hour:02d}H"
 )
