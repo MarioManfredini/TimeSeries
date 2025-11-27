@@ -160,51 +160,58 @@ def idw_loocv(
     return rmse, mae, r2, residuals_df
 
 ###############################################################################
-def save_rf_formula_as_jpg(filename="formula_rf.jpg"):
+def save_idw_formula_as_jpg(filename="formula_idw.jpg"):
     """
-    Save a visual explanation of the Random Forest model as a JPEG image.
+    Save a visual explanation of the IDW (Inverse Distance Weighting) model as a JPEG image.
 
     Parameters:
         filename: output file path
     """
+
+    # === IDW Formula ===
     formula = (
-        r"$\hat{y} = \frac{1}{T} \sum_{t=1}^{T} f_t(x)$"
+        r"$\hat{z}(x_0) = \frac{\sum_{i=1}^{k} \frac{z_i}{d_i^{\,p}}}"
+        r"{\sum_{i=1}^{k} d_i^{-p}}$"
     )
 
     explanation_lines = [
-        r"$\hat{y}$: predicted value (e.g., Ox concentration)",
-        r"$T$: total number of trees in the forest",
-        r"$f_t(x)$: prediction of tree $t$ for input $x$",
-        r"$x$: input features (e.g., NO, NO₂, U, V, longitude, latitude)",
+        r"$\hat{z}(x_0)$: predicted value at location $x_0$",
+        r"$z_i$: observed value at station $i$",
+        r"$d_i$: distance between $x_0$ and station $i$",
+        r"$p$: distance weighting power",
+        r"$k$: number of nearest neighbors",
         "",
-        r"Each tree is trained on a bootstrap sample",
-        r"and uses a random subset of features at each split.",
-        r"Final prediction is the average of all tree outputs."
+        r"Behavior depending on $p$:",
+        r"$p \rightarrow 0$: weights become almost uniform (very smooth surface)",
+        r"$p = 1$: classical inverse-distance weighting",
+        r"$p > 1$: strong emphasis on the nearest point (spiky surface)",
     ]
 
-    fig, ax = plt.subplots(figsize=(6, 4))
+    fig, ax = plt.subplots(figsize=(6, 4.5))
     ax.axis('off')
 
     # Title formula
     ax.text(0, 1, formula, fontsize=18, ha='left', va='center')
 
-    # Explanation
-    y_start = 0.75
+    # Explanation text
+    y_start = 0.80
     line_spacing = 0.07
     for i, line in enumerate(explanation_lines):
         ax.text(0, y_start - i * line_spacing, line,
-                fontsize=12, ha='left', va='center')
+                fontsize=11, ha='left', va='center')
 
     plt.tight_layout()
 
-    temp_file = "_temp_rf_formula.png"
-    fig.savefig(temp_file, dpi=300, bbox_inches='tight', pad_inches=0.2)
+    # Save temporary PNG
+    temp_file = "_temp_idw_formula.png"
+    fig.savefig(temp_file, dpi=300, bbox_inches='tight', pad_inches=0.25)
     plt.close(fig)
 
     # Convert to JPEG
     img = Image.open(temp_file).convert("RGB")
     img.save(filename, format="JPEG", quality=95)
     img.close()
+
     os.remove(temp_file)
 
-    print(f"✅ Saved RF formula JPEG to {filename}")
+    print(f"✅ Saved IDW formula JPEG to {filename}")
