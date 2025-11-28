@@ -41,6 +41,8 @@ month = 5
 day = 12
 hour = 19
 
+###############################################################################
+# Load data
 df = load_preprocessed_hourly_data(
     data_dir,
     station_coordinates,
@@ -52,14 +54,20 @@ df = load_preprocessed_hourly_data(
     target
 )
 
-models = ['linear', 'gaussian', 'exponential', 'spherical']
+print("n stations:", len(df))
+print("Any NaN in target?", df[target].isna().any())
+print(df[['longitude','latitude']].duplicated().sum(), "duplicates of coordinates")
+
+###############################################################################
+# Parameter selection
+variogram_models = ['linear', 'gaussian', 'exponential', 'spherical']
 transforms = [None, 'log', 'sqrt']
 
 print("Variogram  | Transform |   RMSE   |   MAE    |   R²")
 print("-" * 50)
 results = []
 
-for model in models:
+for model in variogram_models:
     for transform in transforms:
         rmse, mae, r2, trues, preds = evaluate_kriging_loocv(target, df, variogram_model=model, transform=transform)
         t_label = transform if transform else "none"
@@ -76,6 +84,9 @@ rmse, mae, r2, trues, preds = evaluate_kriging_loocv(target,
                                                      variogram_model=best_model,
                                                      transform=best_transform
                                                      )
+
+errs = np.array(preds) - np.array(trues)
+print("mean err", errs.mean(), "std err", errs.std())
 
 loocv_image="loocv.png"
 loocv_image_path = os.path.join(".", "tmp", loocv_image)

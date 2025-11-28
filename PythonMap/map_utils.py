@@ -587,11 +587,14 @@ def generate_ordinary_kriging_grid(
 
     # === Kriging ===
     variogram_parameters = get_variogram_parameters(variogram_model)
+    print("variogram params:", variogram_parameters)
+    
     ordinary_kriging = OrdinaryKriging(
         x, y, z,
         variogram_model,
         variogram_parameters,
-        verbose=False,
+        coordinates_type="geographic",
+        verbose=True,
         enable_plotting=False,
     )
 

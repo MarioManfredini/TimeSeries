@@ -59,16 +59,20 @@ def evaluate_kriging_loocv(target, df, variogram_model='linear', transform=None)
 
         try:
             params = get_variogram_parameters(variogram_model)
+
             ok = OrdinaryKriging(
                 x_train, y_train, z_train,
                 variogram_model=variogram_model,
                 variogram_parameters=params,
+                coordinates_type="geographic",
                 verbose=False, enable_plotting=False
             )
+
             z_pred_transf, _ = ok.execute('points', np.array([x_test]), np.array([y_test]))
             z_pred = inverse_transform(z_pred_transf[0])
             preds.append(z_pred)
             trues.append(z_true)
+
         except Exception as e:
             print(f"⚠️ LOOCV failed at point {i}: {e}")
             continue
