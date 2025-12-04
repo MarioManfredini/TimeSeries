@@ -11,11 +11,12 @@ import folium
 
 from pathlib import Path
 from folium.raster_layers import ImageOverlay
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 from map_utils import (
     load_station_temporal_features,
+    add_utm_coordinates,
     compute_bounds_from_df,
-    generate_universal_kriging_grid,
     generate_confidence_overlay_image
 )
 from map_report import (
@@ -26,7 +27,8 @@ from map_report import (
 )
 from map_one_hour_universal_kriging_helper import (
     evaluate_universal_kriging_loocv,
-    generate_universal_kriging_image_with_labels_only
+    generate_universal_kriging_image_with_labels_only,
+    generate_universal_kriging_grid
 )
 
 ###############################################################################
@@ -53,37 +55,67 @@ df = load_station_temporal_features(
     month,
     day,
     hour,
-    lags=24,
+    lags=1,
     target_item=target
 )
 
 print("[DEBUG] Final dataframe shape:", df.shape)
 
+# The Universal Kriging model works best with UTM coordinates
+# although it is not possible to specify the coordinate type
+# when calling the pykrige.uk UniversalKriging function.
+df = add_utm_coordinates(df)
+
 # === Select only numeric drift terms ===
 numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
 
 # Remove coordinates and target from drift
-exclude = ['longitude', 'latitude', target]
+# Universal Kriging uses a built-in linear regression on the drifts. If some drifts are highly collinear:
+# - the coefficients become unstable
+# - small changes in the data generate huge changes in the weights
+# - linear systems become difficult to invert
+exclude = [
+    'station_code', 'longitude', 'latitude', 'x_m', 'y_m', target,
+    # features
+    'NO2(ppm)',
+    # lags
+    'Ox(ppm)_lag1', 'NO2(ppm)_lag1',
+    # diffs
+    'Ox(ppm)_diff_1', 'Ox(ppm)_diff_2', 'Ox(ppm)_diff__3',
+    'NO(ppm)_diff_3', 'NO2(ppm)_diff_3', 'U_diff_3', 'V_diff_3',
+    # rolling mean/std
+    'Ox(ppm)_roll_mean_3', 'Ox(ppm)_roll_std_6',
+    'NO(ppm)_roll_mean_3', 'NO(ppm)_roll_std_6',
+    'NO2(ppm)_roll_mean_3', 'NO2(ppm)_roll_std_6',
+    'U_roll_mean_3', 'U_roll_std_6',
+    'V_roll_mean_3', 'V_roll_std_6',
+    # hour
+    'hour_sin', 'hour_cos'
+]
 drift_terms = [c for c in numeric_cols if c not in exclude]
 
+X = df[drift_terms].fillna(0).values
+vifs = [variance_inflation_factor(X, i) for i in range(X.shape[1])]
+print("Variance Inflation Factor (VIF):")
+# VIFᵢ = 1 / (1 − R²ᵢ)
+# where R²ᵢ is obtained by regressing Xᵢ on all other features.
+for col, vif in zip(drift_terms, vifs):
+    print(col, vif)
+
+# basic checks
 print("[DEBUG] Drift terms used (numeric only):")
 print(drift_terms)
-
 print("[DEBUG] Missing values per column:")
 print(df.isna().sum())
-
 dups = df[['longitude', 'latitude']].duplicated().sum()
 if dups > 0:
     print(f"[WARN] Found {dups} duplicate coordinates.")
-
 print("[DEBUG] External drift columns:", drift_terms)
-
-external_drift = df[drift_terms]
-print("[DEBUG] External drift sample values:")
-print(external_drift.head())
-
-print("[DEBUG] Missing values in external drift:")
-print(external_drift.isna().sum())
+print("[DEBUG] n stations:", len(df))
+print("[DEBUG] Any NaN in target?", df[target].isna().any())
+print("[DEBUG] Any NaN in drift columns?", df[drift_terms].isna().any().any())
+print("[DEBUG] duplicate coords:", df[['longitude','latitude']].duplicated().sum())
+print("[DEBUG] drift shape:", df[drift_terms].shape)
 
 models = ['linear', 'gaussian', 'exponential', 'spherical']
 transforms = [None, 'log', 'sqrt']
@@ -98,7 +130,10 @@ for model in models:
             df,
             variogram_model=model,
             transform=transform,
-            drift_terms=drift_terms
+            drift_terms=drift_terms,
+            x_col='x_m',
+            y_col='y_m',
+            variogram_parameters=None
         )
         t_label = transform if transform else "none"
         print(f"{model:10s} | {t_label:9s} | {rmse:8.5f} | {mae:8.5f} | {r2:6.3f}")
@@ -114,8 +149,11 @@ rmse, mae, r2, trues, preds = evaluate_universal_kriging_loocv(
     df,
     variogram_model=best_model,
     transform=best_transform,
-    drift_terms=drift_terms
-)
+    drift_terms=drift_terms,
+    x_col='x_m',
+    y_col='y_m',
+    variogram_parameters=None
+    )
 loocv_image="loocv.png"
 loocv_image_path = os.path.join(".", "tmp", loocv_image)
 os.makedirs(os.path.dirname(loocv_image_path), exist_ok=True)

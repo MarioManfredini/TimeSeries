@@ -96,15 +96,26 @@ def plot_loocv_results(target, rmse, mae, r2, trues, preds, output_path="loocv.j
     """
     Generates and saves a combined plot:
     - Top: scatter plot (true vs predicted)
-    - Bottom: line plot (true and predicted values)
+    - Bottom: line plot (true and predicted values sorted by true values)
 
     Parameters:
         trues: list or array of true values
         preds: list or array of predicted values
         output_path: path to save the resulting image
     """
+
+    print("\n=== [LOOCV PLOT] Creating LOOCV plots ===")
+
     trues = np.array(trues)
     preds = np.array(preds)
+
+    # === Sort values by ascending true values ===
+    print("[LOOCV PLOT] Sorting values by true measurements...")
+    sorted_indices = np.argsort(trues)
+    trues_sorted = trues[sorted_indices]
+    preds_sorted = preds[sorted_indices]
+
+    print(f"[LOOCV PLOT] Sorted {len(trues_sorted)} values.")
 
     fig, axs = plt.subplots(2, 1, figsize=(6, 8), dpi=300)
 
@@ -113,15 +124,28 @@ def plot_loocv_results(target, rmse, mae, r2, trues, preds, output_path="loocv.j
     axs[0].plot([trues.min(), trues.max()], [trues.min(), trues.max()], 'r--')
     axs[0].set_xlabel(f"True {target}")
     axs[0].set_ylabel(f"Predicted {target}")
-    axs[0].set_title(f"LOOCV - True vs Predicted\nRMSE={rmse:.5f}, MAE={mae:.5f}, R²={r2:.3f}")
+    axs[0].set_title(
+        f"LOOCV - True vs Predicted\n"
+        f"RMSE={rmse:.5f}, MAE={mae:.5f}, R²={r2:.3f}"
+    )
     axs[0].grid(True)
     axs[0].axis("equal")
 
-    # === 2. Line plot ===
-    axs[1].plot(trues, label="True", color="black", linewidth=1.5)
-    axs[1].plot(preds, label="Predicted", color="blue", linestyle="--")
-    axs[1].set_title("True vs Predicted (Index order)")
-    axs[1].set_xlabel("Index")
+    # === 2. Line plot (sorted version) ===
+    axs[1].plot(
+        trues_sorted,
+        label="True (sorted)",
+        color="black",
+        linewidth=1.5
+    )
+    axs[1].plot(
+        preds_sorted,
+        label="Predicted (aligned)",
+        color="blue",
+        linestyle="--"
+    )
+    axs[1].set_title("True vs Predicted (sorted by true values)")
+    axs[1].set_xlabel("Sorted index (by true value)")
     axs[1].set_ylabel(target)
     axs[1].grid(True)
     axs[1].legend()
@@ -129,6 +153,7 @@ def plot_loocv_results(target, rmse, mae, r2, trues, preds, output_path="loocv.j
     plt.tight_layout()
     plt.savefig(output_path, bbox_inches="tight", pad_inches=0.1)
     plt.close()
+
     print(f"✅ LOOCV plot saved to: {output_path}")
 
 ###############################################################################

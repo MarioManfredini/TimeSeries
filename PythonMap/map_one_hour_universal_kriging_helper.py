@@ -11,86 +11,125 @@ import matplotlib.pyplot as plt
 from pykrige.uk import UniversalKriging
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from matplotlib.patches import Rectangle
+from scipy.interpolate import griddata
+
+from map_utils import (
+    get_variogram_parameters
+)
 
 ###############################################################################
-def evaluate_universal_kriging_loocv(target, df, variogram_model='gaussian', transform=None, drift_terms=None):
-    """
-    LOOCV evaluation for Universal Kriging using external drift variables.
+def evaluate_universal_kriging_loocv(
+    target,
+    df,
+    variogram_model="spherical",
+    transform=None,
+    drift_terms=None,
+    x_col="longitude",
+    y_col="latitude",
+    variogram_parameters=None,
+    debug=True
+):
+    if drift_terms is None or len(drift_terms) == 0:
+        raise ValueError("drift_terms must be non-empty.")
 
-    Parameters:
-        df: pandas DataFrame with 'longitude', 'latitude', measurements, and external drift variables
-        variogram_model: str (e.g., 'gaussian', 'spherical')
-        transform: 'log', 'sqrt', or None
-        drift_terms: list of column names to use as external drift (e.g., ['NO(ppm)', 'NO2(ppm)', 'U', 'V'])
-
-    Returns:
-        rmse, mae, r2, trues, preds
-    """
-    epsilon = 1e-4
-    x_all = df['longitude'].values
-    y_all = df['latitude'].values
+    x_all = df[x_col].values
+    y_all = df[y_col].values
     z_raw = df[target].values
 
-    # === Apply transformation ===
-    if transform == 'log':
+    epsilon = 1e-4
+    if transform == "log":
         z_all = np.log(z_raw + epsilon)
-        inverse_transform = lambda x: np.exp(x) - epsilon
-    elif transform == 'sqrt':
+        inv = lambda x: np.exp(x) - epsilon
+    elif transform == "sqrt":
         z_all = np.sqrt(z_raw)
-        inverse_transform = lambda x: x ** 2
+        inv = lambda x: x * x
     else:
         z_all = z_raw
-        inverse_transform = lambda x: x
+        inv = lambda x: x
 
-    if drift_terms is None or len(drift_terms) == 0:
-        raise ValueError("drift_terms must be a non-empty list of external variables.")
+    drift_all = df[drift_terms].values
+    N, D = drift_all.shape
 
-    external_drift = df[drift_terms].values
+    if debug:
+        print("====== GLOBAL DEBUG ======")
+        print(f"Samples: {N}")
+        print(f"Drift variables: {D}")
+        print(f"drift_all shape: {drift_all.shape}")
+        print(f"Any NaN in drift_all: {np.isnan(drift_all).any()}")
+        print("==========================\n")
 
-    dups = df[['longitude', 'latitude']].duplicated().sum()
-    print(f"[DEBUG] Number of duplicate coordinates: {dups}")
+    preds, trues = [], []
 
-    preds = []
-    trues = []
+    for i in range(N):
 
-    for i in range(len(df)):
+        if debug:
+            print(f"\n===== LOOCV POINT {i} =====")
+
+        x_train = np.delete(x_all, i)
+        y_train = np.delete(y_all, i)
+        z_train = np.delete(z_all, i)
+        drift_train = np.delete(drift_all, i, axis=0)
+        drift_test = drift_all[i, :]  # shape (D,)
+
+        # --- specified_drift format ---
+        specified_train = [drift_train[:, d] for d in range(D)]
+        specified_test = [np.array([drift_test[d]]) for d in range(D)]
+
+        if debug:
+            print("Training drift arrays:", len(specified_train))
+            print("Shape each:", specified_train[0].shape)
+            print("Test drift arrays:", len(specified_test))
+            print("Shape each:", specified_test[0].shape)
+
         try:
-            x_train = np.delete(x_all, i)
-            y_train = np.delete(y_all, i)
-            z_train = np.delete(z_all, i)
-            drift_train = np.delete(external_drift, i, axis=0)
-            #print(f"x_train shape: {x_train.shape}, drift_train shape: {drift_train.shape}")
-            
-            x_test = x_all[i]
-            y_test = y_all[i]
-
             uk = UniversalKriging(
-                x_train, y_train, z_train,
+                x_train,
+                y_train,
+                z_train,
                 variogram_model=variogram_model,
-                variogram_parameters=None,
-                drift_terms=drift_terms,
-                external_drift=drift_train,
-                verbose=False,
-                enable_plotting=False
+                variogram_parameters=variogram_parameters,
+                drift_terms=["specified"],
+                specified_drift=specified_train,
+                enable_plotting=False,
+                verbose=False
             )
 
-            z_pred_transf, _ = uk.execute('points', np.array([x_test]), np.array([y_test]))
-            z_pred = inverse_transform(z_pred_transf[0])
+            z_pred_t, _ = uk.execute(
+                "points",
+                np.array([x_all[i]]),
+                np.array([y_all[i]]),
+                specified_drift_arrays=specified_test
+            )
+
+            z_pred = inv(z_pred_t[0])
             preds.append(z_pred)
             trues.append(z_raw[i])
 
+            if debug:
+                print(f"Pred transformed: {z_pred_t[0]:.6f}")
+                print(f"Pred final     : {z_pred:.6f}")
+                print(f"True value     : {z_raw[i]:.6f}")
+
         except Exception as e:
-            print(f"⚠️ UK failed at point {i}: {e}")
+            print(f"❌ ERROR UK at point {i}: {e}")
             continue
 
-    if len(trues) == 0:
-        raise ValueError("❌ All Universal Kriging predictions failed.")
+    trues = np.array(trues)
+    preds = np.array(preds)
 
     mse = mean_squared_error(trues, preds)
-    rmse = mse ** 0.5
+    rmse = np.sqrt(mse)
     mae = mean_absolute_error(trues, preds)
     r2 = r2_score(trues, preds)
-    return rmse, mae, r2, np.array(trues), np.array(preds)
+
+    print("\n======= FINAL RESULTS =======")
+    print(f"RMSE: {rmse:.6f}")
+    print(f"MAE : {mae:.6f}")
+    print(f"R²  : {r2:.6f}")
+    print("==============================")
+
+    return rmse, mae, r2, trues, preds
+
 
 ###############################################################################
 def generate_universal_kriging_image_with_labels_only(
@@ -106,121 +145,111 @@ def generate_universal_kriging_image_with_labels_only(
     num_cells=800
 ):
     """
-    Generate a Universal Kriging interpolated grayscale image with station locations and labels
-    (no basemap, no wind visualization).
-
-    Parameters:
-        df: DataFrame with ['longitude', 'latitude', target, external drift variables]
-        bounds: ((lat_min, lon_min), (lat_max, lon_max))
-        vmin, vmax: fixed grayscale range for consistent intensity
-        drift_terms: list of column names used as external drift
-        variogram_model: variogram model ('gaussian', 'spherical', etc.)
-        transform: None, 'log', or 'sqrt'
-        output_file: PNG file path
-        num_cells: grid resolution
+    Generate a Universal Kriging interpolated grayscale image with station locations and labels,
+    using external drift variables correctly through PyKrige's 'specified' drift mode.
     """
-
     # === Basic checks ===
     if vmin is None or vmax is None:
-        raise ValueError("vmin and vmax must be provided for consistent grayscale rendering.")
+        raise ValueError("vmin and vmax must be provided.")
 
     if drift_terms is None or len(drift_terms) == 0:
-        raise ValueError("drift_terms must be a non-empty list of external drift variables.")
+        raise ValueError("drift_terms must be non-empty.")
 
     # Extract data
-    x = df['longitude'].values
-    y = df['latitude'].values
+    x = df["longitude"].values
+    y = df["latitude"].values
     z_raw = df[target].values
-    external_drift = df[drift_terms].values
+    drift_raw = df[drift_terms].values   # shape (N, D)
 
-    # === Apply transformation ===
+    N, D = drift_raw.shape
+
+    # === Transform values ===
     epsilon = 1e-4
-    if transform == 'log':
+    if transform == "log":
         z = np.log(z_raw + epsilon)
-        inverse_transform = lambda x: np.exp(x) - epsilon
-    elif transform == 'sqrt':
+        inv = lambda x: np.exp(x) - epsilon
+    elif transform == "sqrt":
         z = np.sqrt(z_raw)
-        inverse_transform = lambda x: x ** 2
+        inv = lambda x: x*x
     else:
         z = z_raw
-        inverse_transform = lambda x: x
+        inv = lambda x: x
 
-    (lat_min, lon_min), (lat_max, lon_max) = bounds
+    # Each drift must be an array length N → list of D arrays
+    specified_train = [drift_raw[:, d] for d in range(D)]
 
     # === Create interpolation grid ===
+    (lat_min, lon_min), (lat_max, lon_max) = bounds
     grid_x = np.linspace(lon_min, lon_max, num_cells)
     grid_y = np.linspace(lat_min, lat_max, num_cells)
+    GX, GY = np.meshgrid(grid_x, grid_y)
 
-    # Create drift grid
-    from scipy.interpolate import griddata
+    # === Create drift grid arrays ===
     drift_grids = []
-    for d in range(external_drift.shape[1]):
-        drift_grids.append(
-            griddata(
-                points=(x, y),
-                values=external_drift[:, d],
-                xi=np.meshgrid(grid_x, grid_y),
-                method='linear',
-                fill_value=np.nan
-            )
+    for d in range(D):
+        grid_d = griddata(
+            points=(x, y),
+            values=drift_raw[:, d],
+            xi=(GX, GY),
+            method='linear',
+            fill_value=np.nan
         )
-
-    drift_grids = np.array(drift_grids)
+        drift_grids.append(grid_d)
 
     # === Fit Universal Kriging ===
     uk = UniversalKriging(
-        x, y, z,
+        x,
+        y,
+        z,
         variogram_model=variogram_model,
         variogram_parameters=None,
-        drift_terms=drift_terms,
-        external_drift=external_drift,
+        drift_terms=["specified"],
+        specified_drift=specified_train,   # TRAIN drift arrays
         verbose=False,
         enable_plotting=False
     )
 
-    # === Execute kriging ===
-    grid_z_transf, _ = uk.execute(
-        'grid',
+    # === Kriging execution (with external drift grids) ===
+    grid_z_transformed, _ = uk.execute(
+        "grid",
         grid_x,
-        grid_y
+        grid_y,
+        specified_drift_arrays=drift_grids  # TEST drift grids
     )
-
-    grid_z = inverse_transform(grid_z_transf)
+    grid_z = inv(grid_z_transformed)
 
     # === Plot ===
     aspect_ratio = (lat_max - lat_min) / (lon_max - lon_min)
     width = 6
     height = width * aspect_ratio
-
     fig, ax = plt.subplots(figsize=(width, height), dpi=200)
-    ax.axis('off')
+    ax.axis("off")
 
     ax.imshow(
         grid_z,
         extent=(lon_min, lon_max, lat_min, lat_max),
-        origin='lower',
+        origin="lower",
         vmin=vmin,
         vmax=vmax,
-        cmap='Greys',
+        cmap="Greys",
         alpha=0.9,
-        aspect='auto'
+        aspect="auto"
     )
 
-    # Bounding box of measured region
+    # Bounding box
     rect = Rectangle(
         (x.min(), y.min()),
         x.max() - x.min(),
         y.max() - y.min(),
         linewidth=1.5,
-        edgecolor='black',
-        linestyle='--',
-        facecolor='none'
+        edgecolor="black",
+        linestyle="--",
+        facecolor="none"
     )
     ax.add_patch(rect)
 
-    # === Station markers and labels ===
+    # Stations and labels
     ax.scatter(x, y, c='black', edgecolor='white', s=50, zorder=5)
-
     for i, row in df.iterrows():
         ax.text(
             row['longitude'] + 0.01,
@@ -237,3 +266,103 @@ def generate_universal_kriging_image_with_labels_only(
     plt.close()
 
     print(f"✅ Universal Kriging label image saved to: {output_file}")
+
+###############################################################################
+def generate_universal_kriging_grid(
+    target,
+    df,
+    bounds,
+    drift_terms,
+    num_cells=300,
+    variogram_model='linear'
+):
+    """
+    Compute a 2D grid of interpolated values using Universal Kriging.
+
+    Parameters:
+        target: name of the column to interpolate (e.g., 'Ox(ppm)')
+        df: DataFrame with 'longitude', 'latitude', measurements, and external drift variables
+        bounds: ((lat_min, lon_min), (lat_max, lon_max))
+        drift_terms: list of column names to use as external drift (e.g., ['NO(ppm)', 'NO2(ppm)'])
+        num_cells: number of grid cells along the longitude axis
+        variogram_model: variogram model name (e.g. 'linear', 'power', 'gaussian')
+
+    Returns:
+        grid: interpolated grid (lat_cells x lon_cells)
+    """
+
+    print("\n=== [UK GRID] Starting Universal Kriging grid generation ===")
+
+    # === Basic checks ===
+    if drift_terms is None or len(drift_terms) == 0:
+        raise ValueError("drift_terms must be a non-empty list.")
+
+    print(f"[UK GRID] Target variable: {target}")
+    print(f"[UK GRID] Drift terms: {drift_terms}")
+    print(f"[UK GRID] Variogram model: {variogram_model}")
+    print(f"[UK GRID] Requested grid resolution (longitude cells): {num_cells}")
+
+    # === Extract coordinates and values ===
+    print("[UK GRID] Extracting coordinates and measured values...")
+    x = df['longitude'].values
+    y = df['latitude'].values
+    z = df[target].values
+    external_drift = df[drift_terms].values
+
+    print(f"[UK GRID] Number of stations: {len(df)}")
+
+    # === Unpack bounds ===
+    (lat_min, lon_min), (lat_max, lon_max) = bounds
+    print(f"[UK GRID] Bounds: lat=[{lat_min}, {lat_max}], lon=[{lon_min}, {lon_max}]")
+
+    # === Compute grid dimensions to preserve square cells ===
+    lon_cells = num_cells
+    lat_range = lat_max - lat_min
+    lon_range = lon_max - lon_min
+    lat_cells = int(lon_cells * lat_range / lon_range)
+
+    print(f"[UK GRID] Grid dimensions → lat_cells={lat_cells}, lon_cells={lon_cells}")
+
+    # === Generate grid arrays ===
+    print("[UK GRID] Generating interpolation meshgrid...")
+    grid_lon = np.linspace(lon_min, lon_max, lon_cells)
+    grid_lat = np.linspace(lat_min, lat_max, lat_cells)
+    grid_x, grid_y = np.meshgrid(grid_lon, grid_lat)
+
+    # === Get variogram parameters ===
+    print("[UK GRID] Getting variogram parameters...")
+    variogram_parameters = get_variogram_parameters(variogram_model)
+    print(f"[UK GRID] Variogram parameters: {variogram_parameters}")
+
+    # === Initialize Universal Kriging ===
+    print("[UK GRID] Initializing UniversalKriging model...")
+    uk = UniversalKriging(
+        x,
+        y,
+        z,
+        variogram_model=variogram_model,
+        variogram_parameters=variogram_parameters,
+        drift_terms=drift_terms,
+        external_drift=external_drift,
+        verbose=False,
+        enable_plotting=False
+    )
+
+    # === Execute Kriging ===
+    print("[UK GRID] Executing kriging interpolation...")
+    z_interp, _ = uk.execute(
+        style='grid',
+        xpoints=grid_lon,
+        ypoints=grid_lat
+    )
+
+    print("[UK GRID] Interpolation completed.")
+
+    # === Convert to ndarray ===
+    grid = np.array(z_interp)
+    print(f"[UK GRID] Generated grid shape: {grid.shape}")
+
+    print("=== [UK GRID] Universal Kriging grid generation completed ===\n")
+
+    return grid
+

@@ -6,35 +6,34 @@ Author: Mario
 """
 
 import numpy as np
-
 import matplotlib.pyplot as plt
+
 from pykrige.ok import OrdinaryKriging
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from matplotlib.patches import Rectangle
 
-from map_utils import get_variogram_parameters
-
 ###############################################################################
-def evaluate_kriging_loocv(target, df, variogram_model='linear', transform=None):
+def evaluate_kriging_loocv(
+    target,
+    df,
+    variogram_model='spherical',
+    transform=None,
+    x_col='longitude',
+    y_col='latitude',
+    use_projected=False,
+    variogram_parameters=None
+):
     """
-    Evaluate LOOCV performance for Ordinary Kriging using a given variogram model,
-    with optional transformation (e.g., 'log', 'sqrt').
-
-    Parameters:
-        df: DataFrame with 'longitude', 'latitude', measurements
-        variogram_model: str, variogram model name
-        transform: str or None. Options: 'log', 'sqrt', None
-
-    Returns:
-        rmse, mae, r2
+    LOOCV for Ordinary Kriging with option to use projected coords (x_col,y_col).
+    Returns rmse, mae, r2, trues, preds (lists/arrays).
+    If variogram_parameters is None, PyKrige will attempt automatic estimation.
     """
-    epsilon = 1e-4  # For log transform
-
-    x_all = df['longitude'].values
-    y_all = df['latitude'].values
+    epsilon = 1e-8
+    x_all = df[x_col].values
+    y_all = df[y_col].values
     z_raw = df[target].values
 
-    # === Apply transformation ===
+    # transformation
     if transform == 'log':
         z_all = np.log(z_raw + epsilon)
         inverse_transform = lambda x: np.exp(x) - epsilon
@@ -48,40 +47,41 @@ def evaluate_kriging_loocv(target, df, variogram_model='linear', transform=None)
     preds = []
     trues = []
 
+    coords_type = 'euclidean' if use_projected else 'geographic'
+
     for i in range(len(z_all)):
         x_train = np.delete(x_all, i)
         y_train = np.delete(y_all, i)
         z_train = np.delete(z_all, i)
 
-        x_test = x_all[i]
-        y_test = y_all[i]
-        z_true = z_raw[i]  # always compare in original scale
+        x_test = x_all[i:i+1]
+        y_test = y_all[i:i+1]
+        z_true = z_raw[i]
 
         try:
-            params = get_variogram_parameters(variogram_model)
-
             ok = OrdinaryKriging(
                 x_train, y_train, z_train,
                 variogram_model=variogram_model,
-                variogram_parameters=params,
-                coordinates_type="geographic",
-                verbose=False, enable_plotting=False
+                variogram_parameters=variogram_parameters,
+                verbose=False, enable_plotting=False,
+                coordinates_type=coords_type
             )
-
-            z_pred_transf, _ = ok.execute('points', np.array([x_test]), np.array([y_test]))
+            z_pred_transf, ss = ok.execute('points', x_test, y_test)
             z_pred = inverse_transform(z_pred_transf[0])
             preds.append(z_pred)
             trues.append(z_true)
-
         except Exception as e:
             print(f"⚠️ LOOCV failed at point {i}: {e}")
             continue
 
+    if len(trues) == 0:
+        raise ValueError("❌ All Kriging predictions failed in LOOCV.")
+
     mse = mean_squared_error(trues, preds)
-    rmse = mse ** 0.5
+    rmse = np.sqrt(mse)
     mae = mean_absolute_error(trues, preds)
     r2 = r2_score(trues, preds)
-    return rmse, mae, r2, trues, preds
+    return rmse, mae, r2, np.array(trues), np.array(preds)
 
 ###############################################################################
 def generate_kriging_image_with_labels_only(

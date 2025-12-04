@@ -117,7 +117,7 @@ generate_combined_confidence_overlay_image(
     vmin=vmin,
     vmax=vmax,
     output_file=output_file_path,
-    num_cells=300,
+    num_cells=500,
     max_distance_km=15,
     cmap_name="Reds",
     p=2  # IDW power

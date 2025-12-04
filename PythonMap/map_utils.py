@@ -8,12 +8,14 @@ import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+
 from scipy.spatial import cKDTree
 from collections import defaultdict
 from matplotlib.patches import Rectangle
 from pykrige.ok import OrdinaryKriging
 from pykrige.uk import UniversalKriging
 from datetime import datetime
+from pyproj import Transformer
 
 ###############################################################################
 def load_hourly_measurements(
@@ -199,7 +201,6 @@ def load_station_temporal_features(
             
             for col in cols_to_check:
                 if col in df.columns:
-                    # Controlla se esistono righe valide (non '-')
                     non_dash_values = df[col].astype(str).str.strip() != "-"
                     if non_dash_values.any():
                         has_only_dashes = False
@@ -209,14 +210,12 @@ def load_station_temporal_features(
                 print(f"[WARN] Station {station_code} contains only missing values ('-'). Consider deleting its files.")
                 continue
 
-            # Calcolo U/V dal vento (se disponibili)
             if 'WS(m/s)' in df.columns and 'WD(16Dir)' in df.columns:
                 df['U'], df['V'] = compute_wind_uv(df['WS(m/s)'], df['WD(16Dir)'])
             else:
                 df['U'] = np.nan
                 df['V'] = np.nan
 
-            # Conversione colonne in float
             for col in all_items:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -262,7 +261,6 @@ def load_station_temporal_features(
                 feature_row[f"{item}_roll_mean_3"] = safe_last(roll_mean)
                 feature_row[f"{item}_roll_std_6"] = safe_last(roll_std)
 
-            # Differenze sul target
             for d in [1, 2, 3]:
                 diff_series = df[target_item].shift(1).diff(d)
                 feature_row[f"{target_item}_diff_{d}"] = safe_last(diff_series)
@@ -367,6 +365,21 @@ def create_geojson_from_records(target, records, opacity=0.8):
         "features": features
     }
 
+###############################################################################
+def add_utm_coordinates(df, lon_col='longitude', lat_col='latitude', x_col='x_m', y_col='y_m'):
+    """
+    Add projected UTM coordinates (WGS84) to DataFrame.
+    Chooses UTM zone from mean longitude automatically, uses EPSG:326## (northern hemisphere).
+    """
+    mean_lon = df[lon_col].mean()
+    zone = int((mean_lon + 180) / 6) + 1
+    epsg_code = 32600 + zone  # WGS84 UTM northern hemisphere
+    transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg_code}", always_xy=True)
+    xs, ys = transformer.transform(df[lon_col].values, df[lat_col].values)
+    df[x_col] = xs
+    df[y_col] = ys
+    print(f"[INFO] Added UTM coords with EPSG:{epsg_code} (zone {zone})")
+    return df
 
 ###############################################################################
 def compute_bounds_from_df(df, margin_ratio=0.10):
@@ -599,72 +612,6 @@ def generate_ordinary_kriging_grid(
     )
 
     z_interp, _ = ordinary_kriging.execute('grid', grid_lon, grid_lat)
-    grid = np.array(z_interp)  # shape: (lat_cells, lon_cells)
-
-    return grid
-
-###############################################################################
-def generate_universal_kriging_grid(
-    target,
-    df,
-    bounds,
-    drift_terms,
-    num_cells=300,
-    variogram_model='linear'
-):
-    """
-    Compute a 2D grid of interpolated values using Universal Kriging.
-
-    Parameters:
-        target: name of the column to interpolate (e.g., 'Ox(ppm)')
-        df: DataFrame with 'longitude', 'latitude', measurements, and external drift variables
-        bounds: ((lat_min, lon_min), (lat_max, lon_max))
-        drift_terms: list of column names to use as external drift (e.g., ['NO(ppm)', 'NO2(ppm)'])
-        num_cells: number of grid cells along the longitude axis
-        variogram_model: variogram model name (e.g. 'linear', 'power', 'gaussian')
-
-    Returns:
-        grid: interpolated grid (lat_cells x lon_cells)
-    """
-    # === Extract data ===
-    x = df['longitude'].values
-    y = df['latitude'].values
-    z = df[target].values
-    external_drift = df[drift_terms].values
-
-    (lat_min, lon_min), (lat_max, lon_max) = bounds
-
-    # === Compute grid dimensions to preserve square cells ===
-    lon_cells = num_cells
-    lat_range = lat_max - lat_min
-    lon_range = lon_max - lon_min
-    lat_cells = int(lon_cells * lat_range / lon_range)
-
-    grid_lon = np.linspace(lon_min, lon_max, lon_cells)
-    grid_lat = np.linspace(lat_min, lat_max, lat_cells)
-    grid_x, grid_y = np.meshgrid(grid_lon, grid_lat)
-
-    # === Kriging ===
-    variogram_parameters = get_variogram_parameters(variogram_model)
-
-    uk = UniversalKriging(
-        x,
-        y,
-        z,
-        variogram_model=variogram_model,
-        variogram_parameters=variogram_parameters,
-        drift_terms=drift_terms,
-        external_drift=external_drift,
-        verbose=False,
-        enable_plotting=False
-    )
-
-    z_interp, _ = uk.execute(
-        style='grid',
-        xpoints=grid_lon,
-        ypoints=grid_lat
-    )
-
     grid = np.array(z_interp)  # shape: (lat_cells, lon_cells)
 
     return grid
@@ -966,7 +913,7 @@ def generate_combined_confidence_overlay_image(
         return
 
     # =========================================================
-    # LightGBM prediction
+    # Model prediction
     # =========================================================
     pred = model.predict(grid_scaled)
 

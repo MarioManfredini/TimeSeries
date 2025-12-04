@@ -14,6 +14,7 @@ from folium.raster_layers import ImageOverlay
 
 from map_utils import (
     load_preprocessed_hourly_data,
+    add_utm_coordinates,
     compute_bounds_from_df,
     generate_ordinary_kriging_grid,
     generate_confidence_overlay_image
@@ -58,6 +59,8 @@ print("n stations:", len(df))
 print("Any NaN in target?", df[target].isna().any())
 print(df[['longitude','latitude']].duplicated().sum(), "duplicates of coordinates")
 
+df = add_utm_coordinates(df)
+
 ###############################################################################
 # Parameter selection
 variogram_models = ['linear', 'gaussian', 'exponential', 'spherical']
@@ -69,7 +72,16 @@ results = []
 
 for model in variogram_models:
     for transform in transforms:
-        rmse, mae, r2, trues, preds = evaluate_kriging_loocv(target, df, variogram_model=model, transform=transform)
+        rmse, mae, r2, trues, preds = evaluate_kriging_loocv(
+            target,
+            df,
+            variogram_model=model,
+            transform=transform,
+            x_col='x_m',
+            y_col='y_m',
+            use_projected=True,
+            variogram_parameters=None
+            )
         t_label = transform if transform else "none"
         print(f"{model:10s} | {t_label:9s} | {rmse:8.5f} | {mae:8.5f} | {r2:6.3f}")
         results.append((model, t_label, rmse, mae, r2))
@@ -79,11 +91,16 @@ best_model = best[0]
 best_transform = best[1]
 print(f"\n✅ Best model by R²: {best_model}, {best_transform} transform → RMSE={best[2]:.5f}, MAE={best[3]:.5f}, R²={best[4]:.3f}")
 
-rmse, mae, r2, trues, preds = evaluate_kriging_loocv(target,
-                                                     df,
-                                                     variogram_model=best_model,
-                                                     transform=best_transform
-                                                     )
+rmse, mae, r2, trues, preds = evaluate_kriging_loocv(
+    target,
+    df,
+    variogram_model=best_model,
+    transform=best_transform,
+    x_col='x_m',
+    y_col='y_m',
+    use_projected=True,
+    variogram_parameters=None
+    )
 
 errs = np.array(preds) - np.array(trues)
 print("mean err", errs.mean(), "std err", errs.std())

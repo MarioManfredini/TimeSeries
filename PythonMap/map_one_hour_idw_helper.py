@@ -91,8 +91,7 @@ def idw_loocv(
         target,
         df,
         k,
-        power,
-        output_file=""
+        power
 ):
     coords = np.vstack((df['longitude'].values, df['latitude'].values)).T
     trues = df[target].values
@@ -128,34 +127,6 @@ def idw_loocv(
 
     print("✅ IDW LOOCV completed.")
     print(f"RMSE: {rmse:.5f}, MAE: {mae:.5f}, R²: {r2:.3f}")
-
-    if output_file:
-        # Plot
-        fig, axs = plt.subplots(2, 1, figsize=(8, 10))
-    
-        # --- Scatter plot
-        axs[0].scatter(y_true, y_pred, alpha=0.8)
-        axs[0].plot([y_true.min(), y_true.max()], [y_true.min(), y_true.max()], 'r--')
-        axs[0].set_xlabel(f"True {target}")
-        axs[0].set_ylabel(f"Predicted {target}")
-        axs[0].set_title(f"IDW LOOCV - True vs Predicted\nRMSE={rmse:.5f}, MAE={mae:.5f}, R²={r2:.3f}")
-        axs[0].grid(True)
-        axs[0].axis("equal")
-    
-        # --- Line plot
-        axs[1].plot(y_true, label="True", color="black", linewidth=1.5)
-        axs[1].plot(y_pred, label="Predicted", color="blue", linestyle="--")
-        axs[1].set_title("True vs Predicted (Index order)")
-        axs[1].set_xlabel("Index")
-        axs[1].set_ylabel(target)
-        axs[1].grid(True)
-        axs[1].legend()
-    
-        plt.tight_layout()
-        plt.savefig(output_file, dpi=300)
-        plt.close()
-        
-        print(f"✅ IDW LOOCV Image saved to: {output_file}")
 
     return rmse, mae, r2, residuals_df
 

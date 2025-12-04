@@ -19,7 +19,11 @@ from map_utils import (
     generate_idw_grid,
     generate_confidence_overlay_image
 )
-from map_report import save_model_report_pdf, capture_html_map_screenshot
+from map_report import (
+    capture_html_map_screenshot,
+    save_model_report_pdf,
+    plot_loocv_results
+)
 from map_one_hour_idw_helper import (
     idw_loocv,
     save_idw_formula_as_jpg,
@@ -75,11 +79,22 @@ k = results_sorted[0][0]
 power = results_sorted[0][1]
 print(f"Best: k={k}, power={power}")
 
-loocv_image="loocv.png"
+rmse, mae, r2, residuals_df = idw_loocv(target, df, k, power)
+
+# === LOOCV plot ===
+loocv_image = "idw_loocv.png"
 loocv_image_path = os.path.join(".", "tmp", loocv_image)
 os.makedirs(os.path.dirname(loocv_image_path), exist_ok=True)
 
-rmse, mae, r2, residuals_df = idw_loocv(target, df, k, power, loocv_image)
+plot_loocv_results(
+    target,
+    rmse,
+    mae,
+    r2,
+    residuals_df[target].values,
+    residuals_df['prediction'].values,
+    loocv_image_path
+)
 
 # === Compute bounds ===
 bounds = compute_bounds_from_df(df, margin_ratio=0.10)
@@ -198,6 +213,6 @@ save_model_report_pdf(
     formula_image_path=formula_image_path,
     map_image_path=screenshot_path,
     labels_image_path=idw_labels_image_path,
-    additional_image_path=loocv_image,
+    additional_image_path=loocv_image_path,
     title=f"IDW - {prefecture_name} - {year}/{month}/{day} {hour:02d}H"
 )
