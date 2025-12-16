@@ -106,7 +106,6 @@ if missing:
 
 ###############################################################################
 # === Feature Engineering ===
-# We follow the same feature engineering used for XGBoost to produce exogenous variables.
 features = base_features.copy()
 
 lag_features = {}
@@ -155,23 +154,44 @@ data_model = df.dropna(subset=features + target_col).copy()
 X = data_model[features].copy()
 y = data_model[target_col].squeeze()
 
-# Scale exogenous variables to [0,1] to help optimization stability
-scaler_X = MinMaxScaler()
-X_scaled = pd.DataFrame(scaler_X.fit_transform(X), index=X.index, columns=X.columns)
+# Train/test split
+TRAIN_DAYS = 365
+TEST_DAYS = 30
 
-# Train/test split (70/30)
-split_index = int(len(X_scaled) * 0.7)
-X_train, X_test = X_scaled.iloc[:split_index], X_scaled.iloc[split_index:]
-y_train, y_test = y.iloc[:split_index], y.iloc[split_index:]
+hours_per_day = 24
+train_hours = TRAIN_DAYS * hours_per_day
+test_hours = TEST_DAYS * hours_per_day
+
+# Train/test split FIRST
+X_train_row = X.iloc[-(train_hours + test_hours):-test_hours]
+X_test_row  = X.iloc[-test_hours:]
+
+y_train = y.iloc[-(train_hours + test_hours):-test_hours]
+y_test  = y.iloc[-test_hours:]
+
+# Scale exogenous variables to [0,1] to help optimization stability
+# Fit scaler ONLY on training data
+scaler_X = MinMaxScaler()
+X_train = pd.DataFrame(
+    scaler_X.fit_transform(X_train_row),
+    index=X_train_row.index,
+    columns=X_train_row.columns
+)
+# Transform test data
+X_test = pd.DataFrame(
+    scaler_X.transform(X_test_row),
+    index=X_test_row.index,
+    columns=X_test_row.columns
+)
 
 ###############################################################################
 # === Non-seasonal grid (we search over p,d,q) ===
-p_values = [1, 2]
+p_values = [2, 4, 6]
 d_values = [0]
-q_values = [1, 2]
+q_values = [0, 1, 2]
 
 # Fixed seasonal params
-P, D, Q, s = 1, 1, 1, 24
+P, D, Q, s = 0, 0, 0, 24
 
 param_grid = {"p": p_values, "d": d_values, "q": q_values}
 
@@ -191,7 +211,8 @@ for p in p_values:
                     order=(p, d, q),
                     seasonal_order=(P, D, Q, s),
                     enforce_stationarity=False,
-                    enforce_invertibility=False
+                    enforce_invertibility=False,
+                    simple_differencing=True
                 )
                 model_fit = model.fit(disp=False)
 
@@ -220,7 +241,8 @@ best_model = SARIMAX(
     order=best_order,
     seasonal_order=(P, D, Q, s),
     enforce_stationarity=False,
-    enforce_invertibility=False
+    enforce_invertibility=False,
+    simple_differencing=True
 )
 best_model_fit = best_model.fit(disp=False)
 

@@ -271,7 +271,7 @@ def save_report_to_pdf(
 
             # Save figure to in-memory buffer
             img_buffer = io.BytesIO()
-            fig.savefig(img_buffer, dpi=150, bbox_inches="tight", format="png")
+            fig.savefig(img_buffer, dpi=300, bbox_inches="tight", format="png")
             img_buffer.seek(0)
 
             # Convert buffer to ReportLab-compatible image

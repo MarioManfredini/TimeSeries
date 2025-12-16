@@ -126,26 +126,40 @@ target_cols = [f'{target_item}_t+{i+1:02}' for i in range(forecast_horizon)]
 data_model = df.dropna(subset=features + target_cols).copy()
 
 ###############################################################################
-# === Normalization ===
-scaler_X = MinMaxScaler()
-scaler_y = MinMaxScaler()
+# === Train/Test Split ===
+TRAIN_DAYS = 650
+TEST_DAYS = 280
 
-X_array = scaler_X.fit_transform(data_model[features])
-y_array = scaler_y.fit_transform(data_model[target_cols])
+hours_per_day = 24
+train_hours = TRAIN_DAYS * hours_per_day
+test_hours = TEST_DAYS * hours_per_day
 
-X = pd.DataFrame(X_array, columns=features)
-y = pd.DataFrame(y_array, columns=target_cols)
+X_raw = data_model[features]
+y_raw = data_model[target_cols]
+
+X_train_raw = X_raw.iloc[-(train_hours + test_hours):-test_hours]
+X_test_raw  = X_raw.iloc[-test_hours:]
+
+y_train = y_raw.iloc[-(train_hours + test_hours):-test_hours]
+y_test  = y_raw.iloc[-test_hours:]
 
 ###############################################################################
-# === Train/Test Split ===
-split_index = int(len(X) * 0.7)
-X_train, X_test = X.iloc[:split_index], X.iloc[split_index:]
-y_train, y_test = y.iloc[:split_index], y.iloc[split_index:]
+# === Normalization (INPUT ONLY, no leakage) ===
+scaler_X = MinMaxScaler()
+X_train = pd.DataFrame(
+    scaler_X.fit_transform(X_train_raw),
+    columns=features,
+    index=X_train_raw.index
+)
+
+X_test = pd.DataFrame(
+    scaler_X.transform(X_test_raw),
+    columns=features,
+    index=X_test_raw.index
+)
 
 ###############################################################################
 # === Train LightGBM Multi-Output ===
-print("Training LightGBM model...")
-
 base_model = LGBMRegressor(
     n_estimators=n_estimators,
     learning_rate=learning_rate,
@@ -161,10 +175,9 @@ model = MultiOutputRegressor(base_model)
 model.fit(X_train, y_train)
 
 ###############################################################################
-# === Predictions ===
-y_pred_scaled = model.predict(X_test)
-y_pred = scaler_y.inverse_transform(y_pred_scaled)
-y_true = scaler_y.inverse_transform(y_test)
+# === Predictions (no inverse transform needed) ===
+y_pred = model.predict(X_test)
+y_true = y_test.values
 
 ###############################################################################
 # === Errors per step ===
