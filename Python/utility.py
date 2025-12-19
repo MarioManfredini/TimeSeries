@@ -9,6 +9,8 @@ import pandas as pd
 import numpy as np
 import glob
 import logging
+import re
+
 from datetime import timedelta
 
 ###############################################################################
@@ -273,3 +275,24 @@ def load_ox_time_series(data_dir, stations_df, from_datetime, prefecture_code, h
                 print(f"[ERROR] Errore nel file {file_path}: {e}")
 
     return all_data
+
+###############################################################################
+def sanitize_filename_component(text: str) -> str:
+    """
+    Sanitize a string for safe use in filenames (Windows/Linux).
+    Keeps scientific readability.
+    """
+    replacements = {
+        '/': '_per_',
+        'μ': 'u',
+        '℃': 'C',
+        '％': 'percent',
+    }
+
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
+    # Remove any remaining unsafe characters
+    text = re.sub(r'[<>:"\\|?*]', '', text)
+
+    return text

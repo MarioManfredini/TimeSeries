@@ -16,7 +16,7 @@ from statsmodels.stats.diagnostic import acorr_ljungbox
 from scipy.stats import mode, skew, kurtosis
 from PIL import Image
 
-from utility import load_and_prepare_data, get_station_name
+from utility import load_and_prepare_data, get_station_name, sanitize_filename_component
 from report import save_report_to_pdf
 
 warnings.filterwarnings("ignore")
@@ -98,15 +98,22 @@ df = df[[target_item]].dropna()
 
 ###############################################################################
 # === Train/Test Split ===
-split_index = int(len(df) * 0.7)
-train, test = df.iloc[:split_index], df.iloc[split_index:]
-y_train, y_test = train[target_item], test[target_item]
+# Train/test split
+TRAIN_DAYS = 365
+TEST_DAYS = 30
+
+hours_per_day = 24
+train_hours = TRAIN_DAYS * hours_per_day
+test_hours = TEST_DAYS * hours_per_day
+
+y_train = df.iloc[-(train_hours + test_hours):-test_hours]
+y_test  = df.iloc[-test_hours:]
 
 ###############################################################################
 # === Grid Search for ARIMA (p, d, q) ===
-p_values = [1, 2, 3]
-d_values = [0, 1]
-q_values = [0, 1, 2]
+p_values = [0, 1, 2]
+d_values = [0, 1, 2]
+q_values = [1, 2, 3]
 
 param_grid = {"p": p_values, "d": d_values, "q": q_values}
 
@@ -124,6 +131,7 @@ for p in p_values:
                 y_pred = model_fit.forecast(steps=len(y_test))
                 r2 = r2_score(y_test, y_pred)
                 results.append(((p, d, q), r2))
+                print(f"Parameters: (p, d, q)=({p},{d},{q}) - r2={r2}")
                 if r2 > best_score:
                     best_score = r2
                     best_order = (p, d, q)
@@ -149,7 +157,17 @@ print(f"R²: {r2:.5f}")
 print(f"MAE: {mae:.5f}")
 print(f"RMSE: {rmse:.5f}")
 
-residuals = y_test.values - y_pred.values
+print("NaN in y_test:", y_test.isna().sum().values)
+print("NaN in y_pred:", y_pred.isna().sum())
+print("y_test shape:", y_test.shape)
+print("y_pred shape:", y_pred.shape)
+print("Index equal:", y_test.index.equals(y_pred.index))
+
+y_test_np = y_test.squeeze().values
+y_pred_np = y_pred.values
+
+mask = np.isfinite(y_test_np) & np.isfinite(y_pred_np)
+residuals = y_test_np[mask] - y_pred_np[mask]
 
 # Compute statistics
 res_mean = np.mean(residuals)
@@ -246,7 +264,8 @@ errors = [(target_item, r2, mae, rmse)]
 
 ###############################################################################
 # === Save Report to PDF ===
-report_file = f'arima_parameter_selection_{station_name}_{prefecture_code}_{station_code}_{target_item}.pdf'
+safe_target_item = sanitize_filename_component(target_item)
+report_file = f'arima_parameter_selection_{station_name}_{prefecture_code}_{station_code}_{safe_target_item}.pdf'
 report_path = os.path.join("..", "reports", report_file)
 os.makedirs(os.path.dirname(report_path), exist_ok=True)
 

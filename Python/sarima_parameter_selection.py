@@ -92,15 +92,22 @@ df = df[[target_item]].dropna()
 
 ###############################################################################
 # === Train/Test Split ===
-split_index = int(len(df) * 0.7)
-train, test = df.iloc[:split_index], df.iloc[split_index:]
-y_train, y_test = train[target_item], test[target_item]
+# Train/test split
+TRAIN_DAYS = 365
+TEST_DAYS = 30
+
+hours_per_day = 24
+train_hours = TRAIN_DAYS * hours_per_day
+test_hours = TEST_DAYS * hours_per_day
+
+y_train = df.iloc[-(train_hours + test_hours):-test_hours]
+y_test  = df.iloc[-test_hours:]
 
 ###############################################################################
 # === Non-seasonal grid ===
-p_values = [1, 2]
-d_values = [0, 1]
-q_values = [1, 2]
+p_values = [0, 1, 2]
+d_values = [0]
+q_values = [0, 1, 2]
 
 param_grid = {"p": p_values, "d": d_values, "q": q_values}
 
@@ -160,7 +167,17 @@ print(f"R²: {r2:.5f}")
 print(f"MAE: {mae:.5f}")
 print(f"RMSE: {rmse:.5f}")
 
-residuals = y_test.values - y_pred.values
+print("NaN in y_test:", y_test.isna().sum().values)
+print("NaN in y_pred:", y_pred.isna().sum())
+print("y_test shape:", y_test.shape)
+print("y_pred shape:", y_pred.shape)
+print("Index equal:", y_test.index.equals(y_pred.index))
+
+y_test_np = y_test.squeeze().values
+y_pred_np = y_pred.values
+
+mask = np.isfinite(y_test_np) & np.isfinite(y_pred_np)
+residuals = y_test_np[mask] - y_pred_np[mask]
 
 # Compute statistics
 res_mean = np.mean(residuals)
