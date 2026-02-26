@@ -33,7 +33,7 @@ start_time = time.time()
 # === Parameters ===
 data_dir = Path('..') / 'data' / 'Ehime'
 prefecture_code = '38'
-station_code = '38206050'
+station_code = '38205010'
 station_name = get_station_name(data_dir, station_code)
 
 target_item = 'Ox(ppm)'

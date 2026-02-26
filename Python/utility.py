@@ -296,3 +296,110 @@ def sanitize_filename_component(text: str) -> str:
     text = re.sub(r'[<>:"\\|?*]', '', text)
 
     return text
+
+###############################################################################
+def add_solar_elevation(
+    df: pd.DataFrame,
+    datetime_col: str,
+    latitude: float,
+    longitude: float,
+    timezone_offset: float = 9.0,
+    normalize: bool = True,
+    clip_night: bool = True
+) -> pd.DataFrame:
+    """
+    Calculates the solar elevation angle and adds it to a DataFrame.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input Data
+    datetime_col : str
+        Datetime column name (datetime type)
+    latitude : float
+        Latitude (degrees)
+    longitude : float
+        Longitude (degrees)
+    timezone_offset : float
+        UTC offset (Japan is +9)
+    normalize : bool
+        Whether to normalize (0-1)
+    clip_night : bool
+        Whether to set nighttime values ​​to 0
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with the solar_elevation column added
+    """
+
+    df = df.copy()
+
+    dt = pd.to_datetime(df[datetime_col])
+
+    # Convert latitude and longitude to radians
+    lat_rad = np.radians(latitude)
+
+    # Day of the year
+    day_of_year = dt.dt.dayofyear.values
+
+    # hour (decimal)
+    hour = (
+        dt.dt.hour +
+        dt.dt.minute / 60 +
+        dt.dt.second / 3600
+    ).values
+
+    # fractional year
+    gamma = 2.0 * np.pi / 365.0 * (
+        day_of_year - 1 + (hour - 12) / 24.0
+    )
+
+    # declination, radians
+    decl = (
+        0.006918
+        - 0.399912 * np.cos(gamma)
+        + 0.070257 * np.sin(gamma)
+        - 0.006758 * np.cos(2 * gamma)
+        + 0.000907 * np.sin(2 * gamma)
+        - 0.002697 * np.cos(3 * gamma)
+        + 0.00148  * np.sin(3 * gamma)
+    )
+
+    # equation of time, minutes
+    eq_time = (
+        229.18 * (
+            0.000075
+            + 0.001868 * np.cos(gamma)
+            - 0.032077 * np.sin(gamma)
+            - 0.014615 * np.cos(2 * gamma)
+            - 0.040849 * np.sin(2 * gamma)
+        )
+    )
+
+    # Time difference correction
+    time_offset = eq_time + 4 * longitude - 60 * timezone_offset
+
+    # True solar time (minutes)
+    tst = hour * 60 + time_offset
+
+    # hour angle (radians)
+    ha = np.radians((tst / 4) - 180)
+
+    # solar altitude angle
+    sin_elevation = (
+        np.sin(lat_rad) * np.sin(decl)
+        + np.cos(lat_rad) * np.cos(decl) * np.cos(ha)
+    )
+
+    elevation = np.degrees(np.arcsin(sin_elevation))
+
+    if clip_night:
+        elevation = np.where(elevation < 0, 0, elevation)
+
+    if normalize:
+        elevation = elevation / 90.0  # Normalized to a maximum value of 90 degrees
+
+    df["solar_elevation"] = elevation
+
+    return df
