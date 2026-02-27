@@ -40,7 +40,7 @@ timezone_offset = 9.0 # Japan
 
 target_item = 'Ox(ppm)'
 #hist_exog_features = ['NO(ppm)', 'NO2(ppm)', 'U', 'V', 'TEMP(℃)', 'HUM(％)']
-hist_exog_features = ['solar_elevation', 'U', 'V']
+hist_exog_features = ['solar_elevation']
 
 forecast_horizon = 24
 stride = 1
@@ -117,7 +117,7 @@ def save_nhits_formula_as_jpg(filename="formula_nhits.jpg"):
 # === Load Data ===
 df, _ = load_and_prepare_data(data_dir, prefecture_code, station_code)
 
-df = df[[target_item, 'U', 'V']].dropna().copy()
+df = df[[target_item]].dropna().copy()
 
 df = df.reset_index()
 df = df.rename(columns={"datetime": "ds", target_item: "y"})

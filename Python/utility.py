@@ -308,7 +308,7 @@ def add_solar_elevation(
     clip_night: bool = True
 ) -> pd.DataFrame:
     """
-    Calculates the solar elevation angle and adds it to a DataFrame.
+    Calculates the solar elevation angle with NOAA standard and adds it to a DataFrame.
 
     Parameters
     ----------
